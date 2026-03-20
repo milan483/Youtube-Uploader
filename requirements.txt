@@ -45,7 +45,7 @@ winshell==0.6  # Windows startup folder integration
 # google-auth-httplib2 0.1.1:
 #   - HTTP transport adapter for Google API client
 #
-# pillow 10.1.0:
+# pillow 12.0.0:
 #   - Image library for creating tray icon
 #   - Pure Python, no external dependencies on Windows
 #
@@ -57,7 +57,7 @@ winshell==0.6  # Windows startup folder integration
 #   - HTTP library for connectivity checks
 #   - More reliable than urllib for our use case
 #
-# pywin32 306:
+# pywin32 311:
 #   - Windows-specific APIs (file permissions, shutdown handling)
 #   - CRITICAL for security features (token file permissions)
 #

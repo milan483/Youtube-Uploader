@@ -1,5 +1,5 @@
 # =============================================================================
-# main.py - YouTube Uploader v2.0 Entry Point
+# main.pyw - Application Entry Point
 # =============================================================================
 # Purpose: Application entry point that orchestrates all modules.
 #
@@ -11,14 +11,14 @@
 # 5. Run application
 #
 # This is the ONLY file that should be executed directly.
-# Run with: pythonw main.py (to hide console window)
+# Run with: pythonw main.pyw (to hide console window)
 # =============================================================================
 
 import sys
 import traceback
 from tkinter import messagebox
 
-# Import configuration first (validates on import)
+# Import configuration first (validation is executed during startup run sequence)
 import config
 
 # Import all manager classes
@@ -285,7 +285,7 @@ def main():
     """
     Main entry point for the application.
     
-    This is the function that gets called when you run: pythonw main.py
+    This is the function that gets called when you run: pythonw main.pyw
     
     Returns:
         int: Exit code (0 = success, 1 = error)
@@ -315,7 +315,7 @@ if __name__ == "__main__":
     This block runs when the script is executed directly.
     
     Usage:
-        python main.py      # With console window
-        pythonw main.py     # Without console window (recommended)
+        python main.pyw      # With console window
+        pythonw main.pyw     # Without console window (recommended)
     """
     sys.exit(main())

@@ -1,26 +1,3 @@
-# =============================================================================
-# gui.py - YouTube Uploader v2.0 GUI Module
-# =============================================================================
-# Purpose: Tkinter-based graphical user interface with system tray support.
-#
-# Key Features:
-# - Watch folder selection with automatic monitoring
-# - Privacy, playlist, and category dropdowns
-# - Single file upload and bulk folder watching
-# - Progress bar and status display
-# - Scrolling log window
-# - System tray minimize/restore
-# - Windows shutdown handling
-# - User preference persistence
-# - Automation settings (auto-start, minimized start, notifications)
-# - Windows startup integration
-#
-# Threading Model:
-# - GUI runs on main thread
-# - Upload/monitoring runs on background thread
-# - All GUI updates use thread-safe methods
-# =============================================================================
-
 import tkinter as tk
 from tkinter import ttk
 import threading
@@ -36,110 +13,66 @@ from window_manager import WindowManager
 from system_tray_manager import SystemTrayManager
 from windows_integration import WindowsIntegration
 from gui_components import TooltipHelper
+from controllers.watch_controller import WatchController
 
 
 class YouTubeUploaderGUI:
-    """
-    Main GUI application for YouTube Uploader.
-    
-    This class manages:
-    - Tkinter window and widgets
-    - System tray icon
-    - Background worker thread
-    - Event handlers for user actions
-    
-    Attributes:
-        root (tk.Tk): Main Tkinter window
-        auth_manager: AuthManager instance
-        file_handler: FileHandler instance
-        state_manager: StateManager instance
-        upload_manager: UploadManager instance
-    """
+    """Main GUI application for YouTube Uploader."""
     
     def __init__(self, auth_manager, file_handler, state_manager, upload_manager):
-        """
-        Initialize the GUI application.
-
-        Args:
-            auth_manager: Authenticated AuthManager instance
-            file_handler: FileHandler instance
-            state_manager: StateManager instance
-            upload_manager: UploadManager instance
-        """
-        # Store references to managers
         self.auth_manager = auth_manager
         self.file_handler = file_handler
         self.state_manager = state_manager
         self.upload_manager = upload_manager
 
-        # Thread control flags
-        self.should_stop = False
+        self.file_handler.set_logger(self.log)
+        self.upload_manager.set_logger(self.log)
+        self.watch_controller = None
 
-        # Watch folder path
-        self.watch_folder = ""
-
-        # Create main window
         self.root = tk.Tk()
         self.root.title(f"{config.APP_NAME} v{config.APP_VERSION}")
         self.root.geometry(f"{config.GUI_WINDOW_WIDTH}x{config.GUI_WINDOW_HEIGHT}")
 
-        # Set window icon if available
         self._set_window_icon()
 
-        # Initialize component managers
         self.notification_manager = NotificationManager(log_callback=self.log)
         self.dialog_manager = DialogManager()
         self.windows_integration = WindowsIntegration(log_callback=self.log)
 
-        # System tray manager needs callbacks
         self.system_tray_manager = SystemTrayManager(
             on_show_callback=self._on_show_window,
             on_quit_callback=self._on_quit_app,
             log_callback=self.log
         )
 
-        # Window manager needs tray manager reference
         self.window_manager = WindowManager(
             root=self.root,
             tray_manager=self.system_tray_manager,
             log_callback=self.log
         )
 
-        # Handle window close (minimize to tray instead of exiting)
         self.root.protocol("WM_DELETE_WINDOW", self.window_manager.minimize_to_tray)
 
-        # Build GUI components
         self._setup_gui_components()
 
-        # Setup system tray icon
-        self.system_tray_manager.setup()
+        self.watch_controller = WatchController(
+            upload_manager=self.upload_manager,
+            auth_manager=self.auth_manager,
+            batch_uploader=self.upload_manager.batch_uploader,
+            logger=self.log,
+            callbacks=self._build_watch_callbacks()
+        )
 
-        # Setup Windows shutdown handler
+        self.system_tray_manager.setup()
         self.windows_integration.setup_shutdown_handler()
 
-        # Check for incomplete uploads from previous session
         self._check_incomplete_uploads()
-
-        # Populate playlist dropdown from auth_manager
         self._populate_playlist_dropdown()
-
-        # Load user preferences and apply them
         self._load_preferences()
-
-        # Apply automation settings from preferences
         self._apply_automation_preferences()
     
-    # -------------------------------------------------------------------------
-    # Icon Setup
-    # -------------------------------------------------------------------------
-
     def _set_window_icon(self):
-        """
-        Sets the window icon if icon file exists.
-
-        Uses icon.png from assets/ folder for window title bar and taskbar.
-        Falls back gracefully if icon file doesn't exist.
-        """
+        """Sets the window icon if available."""
         try:
             icon_path = config.ICON_PATH
             if os.path.exists(icon_path):
@@ -154,31 +87,10 @@ class YouTubeUploaderGUI:
         except Exception as e:
             self.log(f"Could not load window icon: {str(e)}")
 
-    # -------------------------------------------------------------------------
-    # GUI Component Setup
-    # -------------------------------------------------------------------------
-    
     def _setup_gui_components(self):
-        """
-        Creates all GUI widgets and layouts.
-
-        Layout structure:
-        - Watch folder selection (top)
-        - Privacy, playlist, and category dropdowns
-        - Automation Settings panel (collapsible)
-        - Next check time and progress bar
-        - Control buttons (start/stop/force check/upload file)
-        - Log text area (main body)
-        - Status bar (bottom)
-
-        All controls include tooltips for user guidance.
-        """
-        # Use TooltipHelper for creating tooltips
+        """Creates all GUI widgets and layouts."""
         create_tooltip = TooltipHelper.create_tooltip
 
-        # ===================
-        # Watch Folder Frame
-        # ===================
         folder_frame = ttk.Frame(self.root)
         folder_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -202,9 +114,6 @@ class YouTubeUploaderGUI:
         browse_button.pack(side=tk.LEFT)
         create_tooltip(browse_button, "Click to select a folder to watch for new videos")
 
-        # ===================
-        # Privacy Frame
-        # ===================
         privacy_frame = ttk.Frame(self.root)
         privacy_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -259,7 +168,6 @@ class YouTubeUploaderGUI:
         # Bind to update upload_manager when changed
         self.playlist_combo.bind('<<ComboboxSelected>>', self._on_playlist_changed)
 
-        # Sort Playlist button
         self.sort_playlist_button = ttk.Button(
             playlist_frame,
             text="Sort Playlist",
@@ -273,9 +181,6 @@ class YouTubeUploaderGUI:
             "Note: Uses YouTube API quota"
         )
 
-        # ===================
-        # Category Frame
-        # ===================
         category_frame = ttk.Frame(self.root)
         category_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -308,12 +213,7 @@ class YouTubeUploaderGUI:
         automation_frame.pack(fill=tk.X, padx=5, pady=5)
         create_tooltip(automation_frame, "Configure automatic behavior and Windows integration")
 
-        # Use grid layout with 3 columns for better organization
-        # Column 0: Automation controls
-        # Column 1: Windows integration
-        # Column 2: Toast notifications
-
-        # Autonomous mode checkbox
+        self.autonomous_mode_var = tk.BooleanVar(value=config.DEFAULT_AUTONOMOUS_MODE)
         self.autonomous_mode_var = tk.BooleanVar(value=config.DEFAULT_AUTONOMOUS_MODE)
         autonomous_check = ttk.Checkbutton(
             automation_frame,
@@ -399,10 +299,6 @@ class YouTubeUploaderGUI:
                 "(Requires pywin32 and winshell packages)"
             )
 
-        # ===================
-        # Toast Notifications Column
-        # ===================
-        # Add a separator label for clarity
         toast_label = ttk.Label(automation_frame, text="📢 Toast Notifications:", font=("Arial", 9, "bold"))
         toast_label.grid(row=0, column=2, sticky=tk.W, padx=(15, 5), pady=(2, 0))
         create_tooltip(toast_label, "Configure which events trigger Windows notifications")
@@ -470,11 +366,8 @@ class YouTubeUploaderGUI:
         # Disable toast checkboxes if win11toast not available
         if not self.notification_manager.is_available():
             for checkbox in [notify_success_check, notify_failed_check, notify_quota_check, notify_batch_check]:
-                checkbox.config(state=tk.DISABLED)
+                checkbox.config(state=tk.DISABLED        )
 
-        # ===================
-        # Next Check Frame
-        # ===================
         next_check_frame = ttk.Frame(self.root)
         next_check_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -484,11 +377,8 @@ class YouTubeUploaderGUI:
             textvariable=self.next_check_var
         )
         next_check_label.pack(side=tk.LEFT)
-        create_tooltip(next_check_label, "When the app will next check the watch folder for new videos")
+        create_tooltip(next_check_label, "When the app will next check the watch folder for new videos"        )
 
-        # ===================
-        # Progress Frame
-        # ===================
         progress_frame = ttk.Frame(self.root)
         progress_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -499,11 +389,8 @@ class YouTubeUploaderGUI:
             maximum=100
         )
         self.progress_bar.pack(fill=tk.X)
-        create_tooltip(self.progress_bar, "Upload progress for current video or batch")
+        create_tooltip(self.progress_bar, "Upload progress for current video or batch"        )
 
-        # ===================
-        # Button Frame
-        # ===================
         button_frame = ttk.Frame(self.root)
         button_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -610,28 +497,11 @@ class YouTubeUploaderGUI:
         self.log(f"Version: {config.APP_VERSION}")
     
     def _populate_playlist_dropdown(self):
-        """
-        Populates the playlist dropdown with user's playlists from auth_manager.
-        """
         playlist_titles = self.auth_manager.get_playlist_titles()
         self.playlist_combo.configure(values=playlist_titles)
         self.playlist_var.set("No Playlist")
 
-    # -------------------------------------------------------------------------
-    # Preference Management
-    # -------------------------------------------------------------------------
-
     def _load_preferences(self):
-        """
-        Loads user preferences from state_manager and applies them to GUI.
-
-        This restores the last-used settings including:
-        - Watch folder path
-        - Privacy setting
-        - Playlist selection
-        - Video category
-        - All automation flags
-        """
         prefs = self.state_manager.get_all_preferences()
 
         # Apply UI preferences
@@ -667,28 +537,12 @@ class YouTubeUploaderGUI:
         self.log("User preferences loaded successfully")
 
     def _save_preference(self, key, value):
-        """
-        Saves a single preference to persistent storage.
-
-        Args:
-            key (str): Preference key
-            value: Preference value (str, bool, etc.)
-        """
         try:
             self.state_manager.set_preference(key, value)
         except Exception as e:
             self.log(f"Warning: Could not save preference '{key}': {str(e)}")
 
     def _apply_automation_preferences(self):
-        """
-        Applies automation preferences after GUI is fully loaded.
-
-        This handles:
-        - Auto-starting folder watching
-        - Minimizing to tray on startup
-        - Autonomous mode (combines both above)
-        """
-        # Autonomous mode overrides individual settings
         if self.autonomous_mode_var.get():
             self.auto_start_watching_var.set(True)
             self.start_minimized_var.set(True)
@@ -703,25 +557,13 @@ class YouTubeUploaderGUI:
             self.root.after(200, self.window_manager.minimize_to_tray)
 
     def _auto_start_watching(self):
-        """
-        Helper method to auto-start watching after GUI is loaded.
-        """
         if self.folder_path_var.get():
             self.log("Auto-starting folder watch (automation preference)")
             self._on_start_watching()
         else:
             self.log("Auto-start disabled: No watch folder configured")
 
-    # -------------------------------------------------------------------------
-    # Automation Preference Handlers
-    # -------------------------------------------------------------------------
-
     def _on_autonomous_mode_changed(self):
-        """
-        Handler for autonomous mode checkbox.
-
-        When enabled, automatically enables auto-start and start-minimized.
-        """
         autonomous = self.autonomous_mode_var.get()
         self._save_preference('autonomous_mode', autonomous)
 
@@ -736,35 +578,28 @@ class YouTubeUploaderGUI:
             self.log("Autonomous mode disabled")
 
     def _on_auto_start_watching_changed(self):
-        """Handler for auto-start watching checkbox."""
         auto_start = self.auto_start_watching_var.get()
         self._save_preference('auto_start_watching', auto_start)
-
         if auto_start:
-            self.log("Auto-start watching enabled (will start monitoring on app launch)")
+            self.log("Auto-start watching enabled")
         else:
             self.log("Auto-start watching disabled")
-            # Disable autonomous mode if auto-start is disabled
             if self.autonomous_mode_var.get():
                 self.autonomous_mode_var.set(False)
                 self._save_preference('autonomous_mode', False)
 
     def _on_start_minimized_changed(self):
-        """Handler for start minimized checkbox."""
         start_minimized = self.start_minimized_var.get()
         self._save_preference('start_minimized', start_minimized)
-
         if start_minimized:
-            self.log("Start minimized enabled (app will start in system tray)")
+            self.log("Start minimized enabled")
         else:
             self.log("Start minimized disabled")
-            # Disable autonomous mode if start minimized is disabled
             if self.autonomous_mode_var.get():
                 self.autonomous_mode_var.set(False)
                 self._save_preference('autonomous_mode', False)
 
     def _on_notify_when_empty_changed(self):
-        """Handler for notify when empty checkbox."""
         notify = self.notify_when_empty_var.get()
         self._save_preference('notify_when_empty', notify)
 
@@ -782,11 +617,7 @@ class YouTubeUploaderGUI:
             self.log("Empty folder notifications disabled")
 
     def _on_start_with_windows_changed(self):
-        """
-        Handler for start with Windows checkbox.
-
-        Creates or removes a shortcut in the Windows startup folder.
-        """
+        """Handler for start with Windows checkbox."""
         start_with_windows = self.start_with_windows_var.get()
         self._save_preference('start_with_windows', start_with_windows)
 
@@ -823,57 +654,44 @@ class YouTubeUploaderGUI:
             self.start_with_windows_var.set(not start_with_windows)
 
     def _on_notify_upload_success_changed(self):
-        """Handler for upload success notification checkbox."""
         notify = self.notify_upload_success_var.get()
         self._save_preference('notify_upload_success', notify)
         self.log(f"Upload success notifications {'enabled' if notify else 'disabled'}")
 
     def _on_notify_upload_failed_changed(self):
-        """Handler for upload failed notification checkbox."""
         notify = self.notify_upload_failed_var.get()
         self._save_preference('notify_upload_failed', notify)
         self.log(f"Upload failed notifications {'enabled' if notify else 'disabled'}")
 
     def _on_notify_quota_exceeded_changed(self):
-        """Handler for quota exceeded notification checkbox."""
         notify = self.notify_quota_exceeded_var.get()
         self._save_preference('notify_quota_exceeded', notify)
         self.log(f"Quota exceeded notifications {'enabled' if notify else 'disabled'}")
 
     def _on_notify_batch_complete_changed(self):
-        """Handler for batch complete notification checkbox."""
         notify = self.notify_batch_complete_var.get()
         self._save_preference('notify_batch_complete', notify)
         self.log(f"Batch complete notifications {'enabled' if notify else 'disabled'}")
 
-    
-    # -------------------------------------------------------------------------
-    # Incomplete Upload Check
-    # -------------------------------------------------------------------------
-    
     def _check_incomplete_uploads(self):
-        """
-        Checks for uploads interrupted by previous crash and resets them to pending.
-        """
         incomplete_count = self.state_manager.reset_incomplete_uploads_to_pending()
         
         if incomplete_count > 0:
             self.log(f"Found {incomplete_count} incomplete upload(s) from previous session")
             self.log("These will be retried when you start watching")
     
-    # -------------------------------------------------------------------------
-    # Logging (Thread-Safe)
-    # -------------------------------------------------------------------------
-    
+    def _ui_call(self, func, *args, **kwargs):
+        try:
+            self.root.after(0, lambda: func(*args, **kwargs))
+        except Exception as e:
+            # If root is destroyed or not ready, ignore UI update
+            try:
+                if self.root.winfo_exists():
+                    print(f"UI update failed: {e}", file=sys.stderr)
+            except Exception:
+                pass
+
     def log(self, message):
-        """
-        Adds a timestamped message to the log window.
-        
-        This is thread-safe - can be called from background thread.
-        
-        Args:
-            message (str): Message to log
-        """
         timestamp = datetime.now().strftime(config.LOG_TIMESTAMP_FORMAT)
         log_line = f"{timestamp}: {message}\n"
         
@@ -881,12 +699,6 @@ class YouTubeUploaderGUI:
         self.root.after(0, self._append_to_log, log_line)
     
     def _append_to_log(self, text):
-        """
-        Internal method to append text to log widget (must run on main thread).
-        
-        Args:
-            text (str): Text to append
-        """
         try:
             self.log_text.insert(tk.END, text)
             self.log_text.see(tk.END)  # Auto-scroll to bottom
@@ -894,27 +706,13 @@ class YouTubeUploaderGUI:
             # If GUI is being destroyed, this might fail - ignore
             print(f"Error appending to log: {e}", file=sys.stderr)
     
-    # -------------------------------------------------------------------------
-    # Event Handlers - Dropdown Changes
-    # -------------------------------------------------------------------------
-    
     def _on_privacy_changed(self, event=None):
-        """
-        Handler for privacy dropdown selection change.
-
-        Updates the upload_manager with new privacy setting and saves preference.
-        """
         privacy = self.privacy_var.get()
         self.upload_manager.set_privacy(privacy)
         self._save_preference('privacy_setting', privacy)
         self.log(f"Privacy setting changed to: {privacy}")
 
     def _on_playlist_changed(self, event=None):
-        """
-        Handler for playlist dropdown selection change.
-
-        Updates the upload_manager with new playlist selection and saves preference.
-        """
         playlist_title = self.playlist_var.get()
         playlist_id = self.auth_manager.get_playlist_id(playlist_title)
 
@@ -927,24 +725,12 @@ class YouTubeUploaderGUI:
             self.log("Playlist changed to: No Playlist")
 
     def _on_category_changed(self, event=None):
-        """
-        Handler for category dropdown selection change.
-
-        Updates the upload_manager with new category selection and saves preference.
-        """
         category = self.category_var.get()
         self.upload_manager.set_category(category)
         self._save_preference('video_category', category)
         self.log(f"Video category changed to: {category}")
 
     def _on_sort_playlist(self):
-        """
-        Handler for Sort Playlist button.
-
-        Sorts the currently selected playlist alphabetically by video title.
-        For date-based filenames, this sorts chronologically.
-        """
-        # Get currently selected playlist
         playlist_title = self.playlist_var.get()
         playlist_id = self.auth_manager.get_playlist_id(playlist_title)
 
@@ -1015,10 +801,10 @@ class YouTubeUploaderGUI:
             try:
                 # Progress callback to update GUI
                 def progress(current, total, message):
-                    self.status_var.set(f"Sorting: {current}/{total}")
+                    self._ui_call(self.status_var.set, f"Sorting: {current}/{total}")
                     if total > 0:
                         percent = (current / total) * 100
-                        self.progress_var.set(percent)
+                        self._ui_call(self.progress_var.set, percent)
                     self.log(message)
 
                 # Perform the sort
@@ -1028,31 +814,34 @@ class YouTubeUploaderGUI:
                 )
 
                 # Reset progress
-                self.progress_var.set(0)
+                self._ui_call(self.progress_var.set, 0)
 
                 # Re-enable button
-                self.sort_playlist_button.config(state=tk.NORMAL)
+                self._ui_call(self.sort_playlist_button.config, state=tk.NORMAL)
 
                 # Show result to user
                 if success:
-                    self.status_var.set("Playlist sorted successfully")
-                    self.dialog_manager.show_info(
+                    self._ui_call(self.status_var.set, "Playlist sorted successfully")
+                    self._ui_call(
+                        self.dialog_manager.show_info,
                         "Sort Complete",
                         f"{message}\n\n"
                         f"Playlist '{playlist_title}' has been sorted alphabetically."
                     )
                 else:
-                    self.status_var.set("Playlist sort failed")
-                    self.dialog_manager.show_error(
+                    self._ui_call(self.status_var.set, "Playlist sort failed")
+                    self._ui_call(
+                        self.dialog_manager.show_error,
                         "Sort Failed",
                         f"Failed to sort playlist:\n\n{message}"
                     )
 
             except Exception as e:
                 self.log(f"Error during playlist sort: {str(e)}")
-                self.sort_playlist_button.config(state=tk.NORMAL)
-                self.status_var.set("Sort error")
-                self.dialog_manager.show_error(
+                self._ui_call(self.sort_playlist_button.config, state=tk.NORMAL)
+                self._ui_call(self.status_var.set, "Sort error")
+                self._ui_call(
+                    self.dialog_manager.show_error,
                     "Sort Error",
                     f"An error occurred during sorting:\n\n{str(e)}"
                 )
@@ -1061,28 +850,14 @@ class YouTubeUploaderGUI:
         thread = threading.Thread(target=sort_thread, daemon=True)
         thread.start()
     
-    # -------------------------------------------------------------------------
-    # Event Handlers - Folder Selection
-    # -------------------------------------------------------------------------
-    
     def _on_browse_folder(self):
-        """
-        Handler for Browse button - opens folder selection dialog and saves preference.
-        """
         folder = self.dialog_manager.ask_directory(title="Select Watch Folder")
-
         if folder:
             self.folder_path_var.set(folder)
             self._save_preference('last_watch_folder', folder)
             self.log(f"Watch folder selected: {folder}")
 
     def _on_upload_single_file(self):
-        """
-        Handler for Upload File button - allows uploading a single video without watching folder.
-
-        This is useful for one-off uploads without setting up folder monitoring.
-        """
-        # Open file dialog to select video file
         filepath = self.dialog_manager.ask_video_file(title="Select Video to Upload")
 
         if not filepath:
@@ -1098,20 +873,27 @@ class YouTubeUploaderGUI:
         def upload_thread():
             try:
                 # Update status
-                self.status_var.set(f"Uploading: {os.path.basename(filepath)}")
+                self._ui_call(self.status_var.set, f"Uploading: {os.path.basename(filepath)}")
+
+                # Create progress callback that updates the progress bar
+                def upload_progress_callback(percent):
+                    self._ui_call(self.progress_var.set, percent)
 
                 # Perform upload
-                success, message, video_id = self.upload_manager.upload_video(filepath)
+                success, message, video_id = self.upload_manager.upload_video(
+                    filepath,
+                    progress_callback=upload_progress_callback
+                )
 
                 # Reset progress
-                self.progress_var.set(0)
+                self._ui_call(self.progress_var.set, 0)
 
                 # Re-enable button
-                self.upload_file_button.config(state=tk.NORMAL)
+                self._ui_call(self.upload_file_button.config, state=tk.NORMAL)
 
                 # Show result to user
                 if success:
-                    self.status_var.set("Upload complete")
+                    self._ui_call(self.status_var.set, "Upload complete")
                     self.log(message)
 
                     # Notify upload success if enabled
@@ -1122,14 +904,15 @@ class YouTubeUploaderGUI:
                             duration=3
                         )
 
-                    self.dialog_manager.show_info(
+                    self._ui_call(
+                        self.dialog_manager.show_info,
                         "Upload Successful",
                         f"Video uploaded successfully!\n\n"
                         f"File: {os.path.basename(filepath)}\n"
                         f"Video ID: {video_id}"
                     )
                 else:
-                    self.status_var.set("Upload failed")
+                    self._ui_call(self.status_var.set, "Upload failed")
                     self.log(f"Upload failed: {message}")
 
                     # Notify upload failed if enabled
@@ -1140,15 +923,16 @@ class YouTubeUploaderGUI:
                             duration=5
                         )
 
-                    self.dialog_manager.show_error(
+                    self._ui_call(
+                        self.dialog_manager.show_error,
                         "Upload Failed",
                         f"Failed to upload video:\n\n{message}"
                     )
 
             except Exception as e:
                 self.log(f"Error during single file upload: {str(e)}")
-                self.upload_file_button.config(state=tk.NORMAL)
-                self.status_var.set("Upload error")
+                self._ui_call(self.upload_file_button.config, state=tk.NORMAL)
+                self._ui_call(self.status_var.set, "Upload error")
 
                 # Check if it was a quota error
                 if "QuotaExceededError" in str(type(e)) or "quotaExceeded" in str(e):
@@ -1177,50 +961,24 @@ class YouTubeUploaderGUI:
         thread = threading.Thread(target=upload_thread, daemon=True)
         thread.start()
     
-    # -------------------------------------------------------------------------
-    # Event Handlers - Control Buttons
-    # -------------------------------------------------------------------------
-    
     def _on_start_watching(self):
-        """
-        Handler for Start Watching button.
-
-        Starts the background worker thread that monitors the watch folder.
-        """
-        # Validate folder is selected
         if not self.folder_path_var.get():
             self.dialog_manager.show_error("Error", config.ERROR_NO_WATCH_FOLDER)
             return
 
-        self.watch_folder = self.folder_path_var.get()
-
-        # Update button states
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.force_check_button.config(state=tk.NORMAL)
 
-        # Reset control flag
-        self.should_stop = False
-
-        # Start background worker thread
-        self.worker_thread = threading.Thread(
-            target=self._watch_folder_worker,
-            daemon=True
-        )
-        self.worker_thread.start()
+        self.watch_controller.start(self.folder_path_var.get())
 
         self.log("Started watching folder for new videos")
         self.status_var.set("Watching folder...")
 
     def _on_stop_watching(self):
-        """
-        Handler for Stop button.
+        """Stops the worker thread."""
+        self.watch_controller.stop()
 
-        Signals the worker thread to stop and resets button states.
-        """
-        self.should_stop = True
-
-        # Reset button states
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.force_check_button.config(state=tk.DISABLED)
@@ -1229,11 +987,7 @@ class YouTubeUploaderGUI:
         self.status_var.set("Stopped")
 
     def _on_exit_button(self):
-        """
-        Handler for Exit button - cleanly exits the application.
-        """
-        # Ask for confirmation if currently uploading
-        if hasattr(self, 'worker_thread') and self.worker_thread.is_alive():
+        if self.watch_controller and self.watch_controller.is_running():
             confirm = self.dialog_manager.ask_yes_no(
                 "Confirm Exit",
                 "Folder watching is active.\n\n"
@@ -1247,297 +1001,107 @@ class YouTubeUploaderGUI:
         self._quit_application()
     
     def _on_force_check(self):
-        """
-        Handler for Force Check Now button.
-        
-        Immediately checks the watch folder for new videos in a background thread.
-        """
         self.log("Force check triggered by user")
-        
-        # Run in background thread to avoid freezing GUI
-        check_thread = threading.Thread(
-            target=self._perform_folder_check,
-            daemon=True
-        )
-        check_thread.start()
+        self.watch_controller.force_check()
     
-    # -------------------------------------------------------------------------
-    # Background Worker Thread
-    # -------------------------------------------------------------------------
-    
-    def _watch_folder_worker(self):
-        """
-        Background worker thread that monitors the watch folder.
+    def _build_watch_callbacks(self):
+        def set_progress(percent):
+            self._ui_call(self.progress_var.set, percent)
 
-        This runs continuously until stopped, checking for:
-        - New videos in watch folder
-        - Quota cooldown status
-        - Stop signals from user
-        """
-        while not self.should_stop:
-            # Check if we're in quota cooldown
-            if self.upload_manager.is_in_cooldown():
-                cooldown_end = self.upload_manager.get_cooldown_end_time()
+        def set_status(message):
+            self._ui_call(self.status_var.set, message)
 
-                if cooldown_end:
-                    # Update next check display with full date and time
-                    # Show date if cooldown ends on a different day
-                    now = datetime.now()
-                    if cooldown_end.date() != now.date():
-                        # Different day - show date and time
-                        next_check_str = cooldown_end.strftime('%Y-%m-%d %H:%M:%S')
-                    else:
-                        # Same day - just show time
-                        next_check_str = cooldown_end.strftime('%H:%M:%S')
+        def set_next_check(message):
+            self._ui_call(self.next_check_var.set, message)
 
-                    self.next_check_var.set(f"Next check: {next_check_str}")
-                    self.log(f"In 24-hour cooldown. Next check at {next_check_str}")
+        def notify_empty():
+            # `auto_close_when_empty` is currently stored as a preference but
+            # no runtime auto-close behavior is enforced yet.
+            if self.notify_when_empty_var.get():
+                self.notification_manager.show_notification(
+                    "YouTube Uploader",
+                    "Watch folder is empty - all videos uploaded!",
+                    duration=3
+                )
 
-                    # Sleep until cooldown ends (in small increments to allow stop signal)
-                    seconds_until_end = (cooldown_end - datetime.now()).total_seconds()
-                    self._sleep_interruptible(seconds_until_end)
+        def notify_upload_success(filename):
+            if self.notify_upload_success_var.get():
+                self.notification_manager.show_notification(
+                    "Upload Succeeded",
+                    f"Successfully uploaded: {filename}",
+                    duration=3
+                )
 
-                    continue
+        def notify_upload_failed(filename, message):
+            if self.notify_upload_failed_var.get():
+                self.notification_manager.show_notification(
+                    "Upload Failed",
+                    f"Failed to upload {filename}: {message}",
+                    duration=5
+                )
 
-            # Perform folder check and upload cycle
-            self._perform_folder_check()
+        def notify_upload_error(filename, error_message):
+            if self.notify_upload_failed_var.get():
+                self.notification_manager.show_notification(
+                    "Upload Error",
+                    f"Error uploading {filename}: {error_message}",
+                    duration=5
+                )
 
-            # Wait before next check
-            self.next_check_var.set("Next check: Waiting for user action...")
-            self._sleep_interruptible(config.WATCH_FOLDER_POLL_INTERVAL)
-    
-    def _perform_folder_check(self):
-        """
-        Checks the watch folder for new videos and uploads them.
+        def notify_quota_exceeded():
+            if self.notify_quota_exceeded_var.get():
+                self.notification_manager.show_notification(
+                    "Quota Exceeded",
+                    "YouTube API quota exceeded. Uploads will resume in 24 hours.",
+                    duration=8
+                )
 
-        This is the core upload cycle called by the worker thread.
-        Sends notifications based on user preferences.
-        """
-        try:
-            # Check if YouTube client needs refresh (due to age or usage)
-            # This helps prevent connection issues with VPN or stale connections
-            if self.upload_manager._client_needs_refresh():
-                self.log("Refreshing YouTube API client (periodic maintenance)...")
-                try:
-                    # Use AuthManager's refresh method (cleaner than full re-init)
-                    # This reuses existing credentials and rebuilds the client
-                    if self.auth_manager.refresh_youtube_client():
-                        # Update upload_manager with the refreshed client
-                        self.upload_manager.set_youtube_client(self.auth_manager.youtube)
-                        self.log("YouTube API client refreshed successfully")
-                    else:
-                        self.log("Warning: YouTube API client refresh failed")
-                        self.log("Continuing with existing connection...")
-                except Exception as e:
-                    self.log(f"Warning: Could not refresh YouTube API client: {str(e)}")
-                    self.log("Continuing with existing connection...")
-
-            # Get video files from watch folder
-            video_files = self.file_handler.get_video_files(self.watch_folder)
-
-            if not video_files:
-                self.log("No new videos found in watch folder")
-
-                # Send notification if enabled
-                if self.notify_when_empty_var.get():
-                    self.notification_manager.show_notification(
-                        "YouTube Uploader",
-                        "Watch folder is empty - all videos uploaded!",
-                        duration=3
-                    )
-
-                return
-
-            self.log(f"Found {len(video_files)} video(s) to upload")
-
-            # Check for stop signal before starting uploads
-            if self.should_stop:
-                self.log("Stop requested - cancelling upload batch")
-                return
-
-            # Track batch statistics
-            batch_success_count = 0
-            batch_fail_count = 0
-            batch_size = len(video_files)
-
-            # Upload each file
-            for i, filename in enumerate(video_files):
-                # Check for stop signal before each upload
-                if self.should_stop:
-                    self.log(f"Stop requested - stopped after {batch_success_count} of {batch_size} video(s)")
-                    break
-
-                # Upload this file
-                filepath = os.path.join(self.watch_folder, filename)
-
-                try:
-                    # Update progress
-                    percent = (i / len(video_files)) * 100
-                    self.progress_var.set(percent)
-                    self.status_var.set(f"Uploading {i+1} of {len(video_files)}: {filename}")
-
-                    # Log start of upload (helps user see what's being uploaded)
-                    self.log(f"Starting upload {i+1}/{len(video_files)}: {filename}")
-
-                    # Perform upload (this is a long-running operation that cannot be interrupted)
-                    success, message, video_id = self.upload_manager.upload_video(filepath)
-
-                    if success:
-                        self.log(message)
-                        batch_success_count += 1
-
-                        # Notify upload success if enabled
-                        if self.notify_upload_success_var.get():
-                            self.notification_manager.show_notification(
-                                "Upload Succeeded",
-                                f"Successfully uploaded: {filename}",
-                                duration=3
-                            )
-                    else:
-                        self.log(f"Skipped: {message}")
-                        batch_fail_count += 1
-
-                        # Notify upload failed if enabled (and not a duplicate/already uploaded)
-                        if self.notify_upload_failed_var.get() and "already uploaded" not in message.lower():
-                            self.notification_manager.show_notification(
-                                "Upload Failed",
-                                f"Failed to upload {filename}: {message}",
-                                duration=5
-                            )
-
-                except Exception as e:
-                    self.log(f"Error uploading {filename}: {str(e)}")
-                    batch_fail_count += 1
-
-                    # Check if it was a quota error
-                    if "QuotaExceededError" in str(type(e)) or "quotaExceeded" in str(e):
-                        self.log("Quota exceeded, stopping upload cycle")
-
-                        # Notify quota exceeded if enabled
-                        if self.notify_quota_exceeded_var.get():
-                            self.notification_manager.show_notification(
-                                "Quota Exceeded",
-                                "YouTube API quota exceeded. Uploads will resume in 24 hours.",
-                                duration=8
-                            )
-                        break
-                    else:
-                        # Notify upload failed if enabled
-                        if self.notify_upload_failed_var.get():
-                            self.notification_manager.show_notification(
-                                "Upload Error",
-                                f"Error uploading {filename}: {str(e)}",
-                                duration=5
-                            )
-
-            # Reset progress
-            self.progress_var.set(0)
-            self.status_var.set("Upload cycle complete")
-
-            # Notify batch complete if enabled and we uploaded something
-            if self.notify_batch_complete_var.get() and batch_success_count > 0:
-                summary = f"Uploaded {batch_success_count} of {batch_size} video(s)"
-                if batch_fail_count > 0:
-                    summary += f" ({batch_fail_count} failed)"
-
+        def notify_batch_complete(summary):
+            if self.notify_batch_complete_var.get():
                 self.notification_manager.show_notification(
                     "Batch Complete",
                     summary,
                     duration=5
                 )
 
-        except Exception as e:
-            self.log(f"Error in folder check: {str(e)}")
+        return {
+            'set_progress': set_progress,
+            'set_status': set_status,
+            'set_next_check': set_next_check,
+            'notify_empty': notify_empty,
+            'notify_upload_success': notify_upload_success,
+            'notify_upload_failed': notify_upload_failed,
+            'notify_upload_error': notify_upload_error,
+            'notify_quota_exceeded': notify_quota_exceeded,
+            'notify_batch_complete': notify_batch_complete
+        }
     
-    def _sleep_interruptible(self, seconds):
-        """
-        Sleeps for the specified duration, but checks for stop signal periodically.
-        
-        This allows the worker thread to respond quickly to stop requests
-        even during long waits.
-        
-        Args:
-            seconds (float): Total seconds to sleep
-        """
-        end_time = time.time() + seconds
-        
-        while time.time() < end_time:
-            if self.should_stop:
-                break
-            
-            # Sleep in small increments
-            time.sleep(config.SLEEP_INCREMENT_SECONDS)
-    
-    # -------------------------------------------------------------------------
-    # Window Management
-    # -------------------------------------------------------------------------
-
     def _on_show_window(self, icon=None):
-        """
-        Restores window from system tray.
-
-        Args:
-            icon: System tray icon (unused, required by pystray callback signature)
-        """
         self.window_manager.restore_from_tray()
     
     def _quit_application(self):
-        """
-        Internal method to cleanly exit the application.
-
-        Can be called from any thread - uses root.after() to ensure
-        GUI operations happen on main thread.
-        """
         def do_quit():
             try:
-                # Signal worker thread to stop
-                self.should_stop = True
-
-                # Hide and stop tray icon
+                if self.watch_controller:
+                    self.watch_controller.stop()
                 self.system_tray_manager.stop()
-
-                # Give worker thread brief moment to stop
                 time.sleep(0.3)
-
-                # Destroy GUI (must be on main thread)
                 self.root.quit()
                 self.root.destroy()
-
-                # Force process exit (ensures clean termination)
                 sys.exit(0)
-
             except Exception as e:
                 print(f"Error during quit: {str(e)}", file=sys.stderr)
-                # Force exit if clean exit fails
                 sys.exit(1)
 
-        # If called from main thread, execute directly
-        # Otherwise, schedule on main thread
         try:
             self.root.after(0, do_quit)
         except:
-            # If root is already destroyed or unavailable, force exit
             sys.exit(0)
 
     def _on_quit_app(self, icon=None):
-        """
-        Handler for tray icon "Exit" menu item.
-
-        Args:
-            icon: System tray icon (unused, required by pystray callback signature)
-        """
         self._quit_application()
     
-    # -------------------------------------------------------------------------
-    # Main Loop
-    # -------------------------------------------------------------------------
-    
     def run(self):
-        """
-        Starts the GUI main loop.
-        
-        This blocks until the window is closed.
-        """
         try:
             self.root.mainloop()
         except Exception as e:

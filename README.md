@@ -4,6 +4,30 @@ A **modular, secure, and maintainable** Python desktop application that automati
 
 ---
 
+## Refactor Safety
+
+This project includes an automated `pytest` suite for critical upload/state/orchestration behavior. Refactors should preserve behavior and keep public APIs stable.
+
+### Automated Tests (Windows)
+
+```bash
+# from repo root
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+pip install pytest
+python -m pytest -q
+```
+
+Notes:
+- These tests are intentionally API/network independent (unit-style with fakes/mocks).
+- Keep using the manual smoke checklist below for end-to-end GUI/runtime verification.
+
+### Smoke Checklist (Manual)
+- Launch the app (no import errors)
+- Upload a single video
+- Verify logs and state files update
+
 ## Features
 
 ### Core Functionality
@@ -12,15 +36,16 @@ A **modular, secure, and maintainable** Python desktop application that automati
 - **Duplicate detection** - MD5 hash-based detection prevents re-uploading same content
 - **Safe file handling** - Copy + verify + delete ensures no data loss
 - **Crash recovery** - Interrupted uploads automatically retry on next start
-- **Quota management** - 24-hour cooldown with automatic resume after quota exceeded
+- **Quota management** - 24-hour cooldown for watch-mode batches with automatic resume after quota exceeded
 - **Playlist support** - Automatically add uploaded videos to selected playlist
 - **System tray** - Minimize to tray and run in background
 - **User preferences** - Remembers last-used settings across sessions
 
 ### Advanced Features
-- **Retry mechanism** - Failed uploads automatically retry with exponential backoff (max 3 attempts)
+- **Retry mechanism** - Failed uploads automatically retry with exponential backoff (3 total attempts: initial + 2 retries)
 - **File lock handling** - Robust retry logic for antivirus/slow disk situations
 - **Hash caching** - Optimized to avoid redundant hash calculations
+- **Client refresh + connection warmup** - Refreshes aging YouTube clients and verifies connectivity before folder batches
 - **Chunked uploads** - Large files (>100MB) upload in 10MB chunks with progress tracking
 - **File size validation** - Pre-upload check against YouTube's 256GB limit
 - **Duplicate filename handling** - Re-uploading edited videos adds timestamp suffix
@@ -45,8 +70,8 @@ A **modular, secure, and maintainable** Python desktop application that automati
 - **Folder empty** - Notification when watch folder is empty (enabled by default)
 
 ### Security & Reliability
-- **Token file protection** - Windows ACLs restrict OAuth tokens to owner-only access
-- **Path validation** - Prevents directory traversal attacks
+- **Token file protection** - On Windows with `pywin32`, ACLs restrict OAuth tokens to owner-only access
+- **Path validation helper** - `FileHandler.validate_path()` exists, but is not yet enforced in the watch/upload flow
 - **Atomic writes** - State files use temp-file-then-rename to prevent corruption
 - **JSON schema validation** - Protects against corrupted state files
 - **No sensitive data in logs** - OAuth tokens never logged
@@ -64,8 +89,37 @@ youtube_uploader/
 ├── state_manager.py        # JSON state persistence
 ├── upload_manager.py       # Upload logic & quota management
 ├── gui.py                  # Tkinter GUI & system tray
+├── dialog_manager.py       # File dialogs and message boxes
+├── notification_manager.py # Windows toast notifications
+├── system_tray_manager.py  # System tray icon handling
+├── window_manager.py       # Window minimize/restore helpers
+├── windows_integration.py  # Windows startup/shutdown integration
 ├── requirements.txt        # Python dependencies
 ├── README.md              # This file
+│
+├── auth/                   # Auth components
+│   ├── oauth_flow.py
+│   ├── playlist_repository.py
+│   ├── token_store.py
+│   └── youtube_client_factory.py
+├── controllers/            # Background controllers
+│   └── watch_controller.py
+├── network/                # Network utilities
+│   └── connectivity.py
+├── services/               # Service layer
+│   ├── batch_uploader.py
+│   └── playlist_service.py
+├── storage/                # JSON state persistence stores
+│   ├── json_store.py
+│   ├── upload_history_store.py
+│   ├── upload_state_store.py
+│   ├── quota_state_store.py
+│   ├── playlist_sort_store.py
+│   └── preferences_store.py
+├── utils/                  # Shared helpers
+│   ├── config_utils.py
+│   ├── logging.py
+│   └── youtube_api.py
 │
 ├── client_secrets.json     # Your OAuth credentials (YOU provide this)
 ├── token.pickle           # Generated after first auth (auto-created)
@@ -73,6 +127,7 @@ youtube_uploader/
 ├── upload_history.json    # MD5 hashes of uploaded files (auto-created)
 ├── upload_state.json      # Upload state tracking (auto-created)
 ├── quota_state.json       # Quota cooldown tracking (auto-created)
+├── playlist_sort_state.json # Playlist sorting resume state (auto-created)
 └── user_preferences.json  # User settings and automation preferences (auto-created)
 ```
 
@@ -115,7 +170,7 @@ pip install -r requirements.txt
 
 **Note**: If `pywin32` installation fails, try:
 ```bash
-pip install pywin32==306 --upgrade
+pip install pywin32==311 --upgrade
 python venv\Scripts\pywin32_postinstall.py -install
 ```
 
@@ -336,16 +391,17 @@ Choose from popular YouTube categories:
 ## Data Integrity Guarantees
 
 ### File Safety
-1. **Copy first**: File is copied to `Uploaded/` folder
-2. **Verify copy**: MD5 hash comparison ensures identical copy (using cached hash)
-3. **Delete original**: Only deleted if verification succeeds (with retry logic)
-4. **On failure**: Original file preserved
+1. **Same-drive fast path**: File is atomically renamed into `Uploaded/` when possible
+2. **Cross-drive/fallback path**: File is copied to `Uploaded/` and hash-verified
+3. **Delete original**: Original is deleted only after successful copy verification (with retry logic)
+4. **On failure**: Original file is preserved
 
 ### State Persistence
 - **Atomic writes**: State files use temp-file-then-rename
 - **Crash recovery**: Interrupted uploads marked as 'pending' and retried
 - **Validation**: Schema validation before loading state
-- **Backups**: Corrupted files backed up with timestamp
+- **Backups**: Malformed JSON files are backed up with a timestamp suffix (`.corrupt.<ts>`)
+- **Schema-invalid payloads**: Invalid schema content is logged and reset to empty state
 - **Retry tracking**: Failed uploads tracked with retry count and next retry time
 
 ### Duplicate Prevention
@@ -361,21 +417,24 @@ Choose from popular YouTube categories:
 - **Limit**: ~10 videos per 24 hours (varies by account)
 - **Detection**: Automatic via API error codes
 - **Cooldown**: 24 hours + 5-minute buffer
-- **Enforcement**: No uploads attempted during cooldown
+- **Enforcement scope**: Cooldown gate is enforced by the background watch/batch loop
 
 ### Cooldown Behavior
 When quota is exceeded:
 1. App records exact timestamp
-2. Stops all upload attempts
+2. Stops watch-mode batch upload attempts
 3. Displays next check time
 4. Waits 24 hours 5 minutes
-5. Automatically resumes
+5. Automatically resumes watch-mode processing
+
+Manual actions (`Upload File...`, playlist sort) can still call the API and may return quota errors while cooldown is active.
 
 ### Retry Logic
 For failed uploads (non-quota errors):
-- **Automatic retry**: Up to 3 attempts
-- **Exponential backoff**: 1 min, 2 min, 4 min delays
+- **Automatic retry**: 3 total attempts (initial + 2 retries)
+- **Exponential backoff**: 1 min, then 2 min
 - **Smart tracking**: Retry count and next retry time stored
+- **Transient network fast-retry**: Connection-reset/timeout style errors get short-delay retries before normal backoff scheduling
 - **Manual intervention**: Only required after all retries exhausted
 
 ---
@@ -405,8 +464,8 @@ For failed uploads (non-quota errors):
 
 ### Upload fails repeatedly
 - Check log window for specific error
-- Failed uploads automatically retry up to 3 times
-- Manual intervention needed after 3 failed attempts
+- Failed uploads are attempted up to 3 total times (initial + 2 retries)
+- Manual intervention is needed after those attempts are exhausted
 - Check file permissions and disk space
 
 ### File locked errors
@@ -454,10 +513,11 @@ For failed uploads (non-quota errors):
 - Never commit `client_secrets.json` to git
 - Never commit `token.pickle` to git
 - `.gitignore` included for protection
-- Token file has restrictive permissions (Windows)
+- Token file ACL hardening is applied on Windows when `pywin32` is installed
+- `token.pickle` is trusted local state and deserialized with Python `pickle`
 
 ### File Permissions
-On Windows, `token.pickle` is automatically set to owner-only access:
+On Windows with `pywin32` available, `token.pickle` is set to owner-only access:
 ```
 Owner: FULL_CONTROL
 Everyone else: No access
@@ -502,6 +562,22 @@ Everyone else: No access
 }
 ```
 
+### playlist_sort_state.json
+```json
+{
+  "playlist_id": "PLxxxxxxxxxxxxxxxx",
+  "sorted_items": [
+    {
+      "id": "UEx4eHh4eHh4eHh4eHh4",
+      "video_id": "dQw4w9WgXcQ",
+      "title": "2025-01-15_clip.mp4",
+      "snippet": {}
+    }
+  ],
+  "last_position": 42
+}
+```
+
 ### user_preferences.json
 ```json
 {
@@ -513,6 +589,7 @@ Everyone else: No access
   "auto_start_watching": true,
   "start_minimized": true,
   "notify_when_empty": true,
+  "auto_close_when_empty": false,
   "start_with_windows": true,
   "notify_upload_success": false,
   "notify_upload_failed": true,
@@ -521,21 +598,30 @@ Everyone else: No access
 }
 ```
 
+`auto_close_when_empty` is currently stored/validated as a preference but not yet enforced by runtime behavior.
+
 ---
 
 ## Development
 
+See `ARCHITECTURE.md` for module boundaries, contracts, and refactor-safe extension guidance.
+
 ### Code Style
 - PEP 8 compliant
-- Extensive comments explaining WHY, not just WHAT
-- Each function has docstring with purpose, args, returns
+- Comments should prioritize rationale for non-obvious behavior
+- Public APIs and critical persistence/security paths are documented with docstrings
 - Security considerations documented
 
 ### Module Architecture
-- **Separated concerns** - Each module has single responsibility
-- **Easy to test** - Modules can be tested independently
-- **Easy to extend** - Add features without touching unrelated code
-- **Better maintainability** - Changes isolated to specific modules
+- **Layered responsibilities** - UI (`gui.py`) orchestrates managers/services; auth/storage remain dedicated modules
+- **State boundaries** - JSON persistence is implemented in `storage/*.py`; `state_manager.py` also owns retry gating, cooldown timing, playlist-sort resume, and preference defaults
+- **Known coupling points** - `WatchController`, `BatchUploader`, and `UploadManager` collaborate through callback maps and shared `state_manager` method contracts
+- **Extension guidance** - New behavior should be added in `services/`, `storage/`, or `utils/` before expanding GUI/controller code
+
+### Internal Contracts
+- **Watch callbacks (GUI -> WatchController)**: `set_progress`, `set_status`, `set_next_check`, `notify_empty`, `notify_upload_success`, `notify_upload_failed`, `notify_upload_error`, `notify_quota_exceeded`, `notify_batch_complete`
+- **Batch callbacks (WatchController/UploadManager -> BatchUploader)**: `refresh_client`, `on_no_files`, `on_batch_found`, `on_batch_cancelled`, `on_batch_stopped`, `on_file_start`, `on_progress`, `on_file_result`, `on_file_error`, `on_quota_exceeded`, `warmup_connection`, `on_warmup_failed`
+- **BatchUploader state contract**: when present, `upload_manager.state_manager` is expected to provide `get_upload_state`, `is_ready_for_retry`, and `get_retry_info`
 
 ### Contributing
 - Fork the repository
