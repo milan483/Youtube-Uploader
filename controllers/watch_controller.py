@@ -17,8 +17,28 @@ class WatchController(LoggerMixin):
         self.callbacks = callbacks or {}
         self.should_stop = False
         self.worker_thread = None
-        self.watch_folder = ""
+        self._folder_state_lock = threading.RLock()
+        self._watch_folder = ""
+        self._normalized_watch_folder = ""
+        self._folder_generation = 0
+        self._empty_notification_armed = False
         self._check_lock = threading.Lock()
+
+    @property
+    def watch_folder(self):
+        with self._folder_state_lock:
+            return self._watch_folder
+
+    @watch_folder.setter
+    def watch_folder(self, folder):
+        normalized = os.path.normcase(os.path.abspath(os.path.normpath(folder))) if folder else ""
+        with self._folder_state_lock:
+            if normalized != self._normalized_watch_folder:
+                self._normalized_watch_folder = normalized
+                # In-flight callbacks belong to the previous folder selection.
+                self._folder_generation += 1
+                self._empty_notification_armed = False
+            self._watch_folder = folder
 
     def set_callbacks(self, callbacks):
         self.callbacks = callbacks or {}
@@ -98,6 +118,10 @@ class WatchController(LoggerMixin):
             return
 
         try:
+            with self._folder_state_lock:
+                watch_folder = self._watch_folder
+                folder_generation = self._folder_generation
+
             batch_counts = {'success': 0, 'fail': 0, 'skip': 0, 'size': 0}
             flags = {'cancelled': False, 'empty': False}
 
@@ -117,9 +141,19 @@ class WatchController(LoggerMixin):
             def on_no_files():
                 flags['empty'] = True
                 self._log("No new videos found in watch folder")
-                self._emit('notify_empty')
+                with self._folder_state_lock:
+                    notify_empty = (folder_generation == self._folder_generation
+                                    and self._empty_notification_armed)
+                    if notify_empty:
+                        self._empty_notification_armed = False
+                # GUI callbacks may wait for the UI thread, which can change folders.
+                if notify_empty:
+                    self._emit('notify_empty')
 
             def on_batch_found(total_files):
+                with self._folder_state_lock:
+                    if folder_generation == self._folder_generation and total_files > 0:
+                        self._empty_notification_armed = True
                 batch_counts['size'] = total_files
                 self._log(f"Found {total_files} video(s) to upload")
 
@@ -181,7 +215,7 @@ class WatchController(LoggerMixin):
             }
 
             self.batch_uploader.upload_folder(
-                self.watch_folder,
+                watch_folder,
                 callbacks=callbacks,
                 should_stop=lambda: self.should_stop
             )

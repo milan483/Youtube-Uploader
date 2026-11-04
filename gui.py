@@ -1020,7 +1020,7 @@ class YouTubeUploaderGUI:
             if self.notify_when_empty_var.get():
                 self.notification_manager.show_notification(
                     "YouTube Uploader",
-                    "Watch folder is empty - all videos uploaded!",
+                    "No supported videos found in watch folder.",
                     duration=3
                 )
 
