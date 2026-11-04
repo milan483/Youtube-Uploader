@@ -1,4 +1,5 @@
 import io
+import os
 
 import pytest
 
@@ -127,6 +128,147 @@ def test_upload_video_success_updates_state_and_history(monkeypatch, tmp_path):
     assert file_handler.safe_move_calls
 
 
+def test_watch_upload_archives_under_root_preserving_relative_parent(monkeypatch, tmp_path):
+    manager, _, youtube, file_handler, state_manager = build_upload_manager(
+        monkeypatch,
+        tmp_path,
+        outcomes=[{"id": "nested-1"}],
+    )
+    watch_root = tmp_path / "watch"
+    source = watch_root / "Games" / "Rain World" / "clip.mp4"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"nested-video")
+
+    success, _, video_id = manager.upload_video(str(source), watch_root=str(watch_root))
+
+    assert success is True
+    assert video_id == "nested-1"
+    assert file_handler.safe_move_calls == [
+        (str(source), str(watch_root / "Uploaded" / "Games" / "Rain World" / "clip.mp4"), "abc123")
+    ]
+    assert file_handler.created_directories == [str(watch_root / "Uploaded" / "Games" / "Rain World")]
+    assert youtube.insert_calls
+    assert state_manager.history_calls == [("abc123", "clip.mp4", "nested-1")]
+
+
+def test_watch_upload_rejects_unsafe_source_before_hash_state_or_network(monkeypatch, tmp_path):
+    manager, filepath, youtube, file_handler, state_manager = build_upload_manager(
+        monkeypatch,
+        tmp_path,
+        outcomes=[{"id": "unused"}],
+    )
+    hash_calls = []
+    original_hash = file_handler.compute_file_hash
+    file_handler.compute_file_hash = lambda path: (hash_calls.append(path), original_hash(path))[1]
+    monkeypatch.setattr(
+        upload_manager_module.FileHandler,
+        "is_safe_watch_file",
+        staticmethod(lambda path, root: False),
+        raising=False,
+    )
+
+    success, message, video_id = manager.upload_video(filepath, watch_root=str(tmp_path))
+
+    assert success is False
+    assert "Unsafe" in message
+    assert video_id is None
+    assert hash_calls == []
+    assert state_manager.set_state_calls == []
+    assert youtube.insert_calls == []
+    assert file_handler.safe_move_calls == []
+
+
+def test_watch_upload_rejects_symlinked_archive_before_network(monkeypatch, tmp_path):
+    manager, _, youtube, file_handler, state_manager = build_upload_manager(
+        monkeypatch,
+        tmp_path,
+        outcomes=[{"id": "unused"}],
+    )
+    watch_root = tmp_path / "watch"
+    source = watch_root / "clip.mp4"
+    source.parent.mkdir()
+    source.write_bytes(b"video")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (watch_root / "Uploaded").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        upload_manager_module.FileHandler,
+        "is_safe_watch_file",
+        staticmethod(lambda path, root: True),
+        raising=False,
+    )
+
+    success, message, video_id = manager.upload_video(str(source), watch_root=str(watch_root))
+
+    assert success is False
+    assert "Unsafe archive" in message
+    assert video_id is None
+    assert youtube.insert_calls == []
+    assert state_manager.set_state_calls == []
+    assert file_handler.safe_move_calls == []
+    assert source.read_bytes() == b"video"
+
+
+def test_watch_upload_preserves_original_when_archive_move_fails(monkeypatch, tmp_path):
+    manager, _, _, file_handler, _ = build_upload_manager(
+        monkeypatch,
+        tmp_path,
+        outcomes=[{"id": "uploaded"}],
+        file_handler=FakeFileHandler(safe_move_result=(False, "copy verification failed")),
+    )
+    watch_root = tmp_path / "watch"
+    source = watch_root / "Subdir" / "clip.mp4"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"original")
+
+    success, _, _ = manager.upload_video(str(source), watch_root=str(watch_root))
+
+    assert success is True  # YouTube succeeded; the archive move is a warning.
+    assert source.read_bytes() == b"original"
+    assert file_handler.safe_move_calls == [
+        (str(source), str(watch_root / "Uploaded" / "Subdir" / "clip.mp4"), "abc123")
+    ]
+
+
+def test_watch_upload_keeps_manual_upload_sibling_archive_compatibility(monkeypatch, tmp_path):
+    manager, filepath, _, file_handler, _ = build_upload_manager(
+        monkeypatch,
+        tmp_path,
+        outcomes=[{"id": "manual-1"}],
+    )
+
+    success, _, _ = manager.upload_video(filepath)
+
+    assert success is True
+    assert file_handler.safe_move_calls == [
+        (filepath, str(tmp_path / "Uploaded" / "video.mp4"), "abc123")
+    ]
+
+
+def test_watch_upload_accepts_relative_source_and_root(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    manager, _, _, file_handler, _ = build_upload_manager(
+        monkeypatch,
+        tmp_path,
+        outcomes=[{"id": "relative-1"}],
+    )
+    source = tmp_path / "watch" / "Subdir" / "clip.mp4"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"video")
+
+    success, _, video_id = manager.upload_video(
+        os.path.join("watch", "Subdir", "clip.mp4"),
+        watch_root="watch",
+    )
+
+    assert success is True
+    assert video_id == "relative-1"
+    assert file_handler.safe_move_calls == [
+        (os.path.join("watch", "Subdir", "clip.mp4"),
+         os.path.join("watch", "Uploaded", "Subdir", "clip.mp4"), "abc123")
+    ]
+
+
 def test_upload_video_skips_duplicate_before_api_call(monkeypatch, tmp_path):
     manager, filepath, youtube, _, state_manager = build_upload_manager(
         monkeypatch,
@@ -216,3 +358,50 @@ def test_upload_video_rejects_file_over_size_limit(monkeypatch, tmp_path):
     assert video_id is None
     assert "File too large" in message
     assert youtube.insert_calls == []
+
+
+def test_nested_uploads_with_real_file_handler_archive_once_without_rediscovery(monkeypatch, tmp_path):
+    from file_handler import FileHandler
+
+    handler = FileHandler()
+    manager, _, youtube, _, state = build_upload_manager(
+        monkeypatch, tmp_path, outcomes=[{"id": "first"}, {"id": "second"}], file_handler=handler)
+    root = tmp_path / "watch"
+    for parent, payload in (("Game A", b"first clip"), ("Game B", b"second clip")):
+        source = root / parent / "clip.mp4"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(payload)
+
+    paths = handler.get_video_files(str(root), recursive=True)
+    assert paths == [os.path.join("Game A", "clip.mp4"), os.path.join("Game B", "clip.mp4")]
+    for relative in paths:
+        success, _, _ = manager.upload_video(str(root / relative), watch_root=str(root))
+        assert success
+        assert not (root / relative).exists()
+
+    assert (root / "Uploaded" / "Game A" / "clip.mp4").read_bytes() == b"first clip"
+    assert (root / "Uploaded" / "Game B" / "clip.mp4").read_bytes() == b"second clip"
+    assert handler.get_video_files(str(root), recursive=True) == []
+    assert len(youtube.insert_calls) == len(state.history_calls) == 2
+
+
+def test_watch_upload_rejects_junction_like_archive_before_network(monkeypatch, tmp_path):
+    from file_handler import FileHandler
+
+    manager, _, youtube, _, _ = build_upload_manager(
+        monkeypatch, tmp_path, outcomes=[{"id": "unused"}])
+    source = tmp_path / "watch" / "clip.mp4"
+    source.parent.mkdir()
+    source.write_bytes(b"clip")
+    archive = source.parent / "Uploaded"
+    archive.mkdir()
+    original_guard = FileHandler._is_link_or_junction
+    monkeypatch.setattr(FileHandler, "_is_link_or_junction", staticmethod(
+        lambda path: os.fspath(path) == str(archive) or original_guard(path)))
+
+    success, message, _ = manager.upload_video(str(source), watch_root=str(source.parent))
+
+    assert not success
+    assert "Unsafe archive" in message
+    assert youtube.insert_calls == []
+    assert source.read_bytes() == b"clip"

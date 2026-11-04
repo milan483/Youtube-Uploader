@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 import threading
 
 from controllers.watch_controller import WatchController
+from file_handler import FileHandler
+from services.batch_uploader import BatchUploader
 
 
 class FakeUploadManager:
@@ -34,9 +36,11 @@ class ScriptedBatchUploader:
     def __init__(self, script=None):
         self.script = script
         self.calls = 0
+        self.recursive_options = []
 
-    def upload_folder(self, folder_path, callbacks=None, should_stop=None):
+    def upload_folder(self, folder_path, callbacks=None, should_stop=None, recursive=False):
         self.calls += 1
+        self.recursive_options.append(recursive)
         if self.script:
             self.script(callbacks or {}, should_stop)
         return {}
@@ -48,9 +52,11 @@ class OutcomeBatchUploader:
     def __init__(self, outcomes):
         self.outcomes = iter(outcomes)
         self.paths = []
+        self.recursive_options = []
 
-    def upload_folder(self, folder_path, callbacks=None, should_stop=None):
+    def upload_folder(self, folder_path, callbacks=None, should_stop=None, recursive=False):
         self.paths.append(folder_path)
+        self.recursive_options.append(recursive)
         outcome = next(self.outcomes)
         if outcome:
             callbacks["on_batch_found"](outcome)
@@ -183,7 +189,7 @@ def test_stale_callbacks_after_folder_change_and_return_to_same_path_are_ignored
     class DeferredBatchUploader:
         callbacks = None
 
-        def upload_folder(self, folder_path, callbacks=None, should_stop=None):
+        def upload_folder(self, folder_path, callbacks=None, should_stop=None, recursive=False):
             self.callbacks = callbacks
 
     batch_uploader = DeferredBatchUploader()
@@ -268,6 +274,92 @@ def test_periodic_and_manual_checks_share_empty_notification_state(monkeypatch):
     controller.force_check()
     controller.force_check()
 
+    assert events["notify_empty"] == [True]
+
+
+def test_recursive_option_is_snapshotted_for_periodic_and_manual_checks(monkeypatch):
+    events = defaultdict(list)
+
+    class RecursiveOutcomeUploader:
+        def __init__(self):
+            self.recursive_options = []
+            self.outcomes = iter([1, 0])
+
+        def upload_folder(self, folder_path, callbacks=None, should_stop=None, recursive=False):
+            self.recursive_options.append(recursive)
+            if next(self.outcomes):
+                callbacks["on_batch_found"](1)
+            else:
+                callbacks["on_no_files"]()
+
+    uploader = RecursiveOutcomeUploader()
+    controller = WatchController(
+        upload_manager=FakeUploadManager(),
+        auth_manager=FakeAuthManager(),
+        batch_uploader=uploader,
+        callbacks=make_callbacks(events),
+    )
+    controller.watch_folder = "/watch"
+    controller.set_scan_subdirectories(True)
+    controller.should_stop = False
+
+    class ImmediateThread:
+        def __init__(self, target, kwargs=None, daemon=None):
+            self.target = target
+            self.kwargs = kwargs or {}
+
+        def start(self):
+            self.target(**self.kwargs)
+
+    monkeypatch.setattr("controllers.watch_controller.threading.Thread", ImmediateThread)
+    sleep_calls = {"count": 0}
+
+    def stop_after_one_poll(seconds):
+        sleep_calls["count"] += 1
+        if sleep_calls["count"] == 1:
+            controller.should_stop = True
+
+    controller._sleep_interruptible = stop_after_one_poll
+    controller._watch_folder_worker()
+    controller.should_stop = False
+    controller.force_check()
+
+    assert uploader.recursive_options == [True, True]
+    assert events["notify_empty"] == [True]
+
+
+def test_recursive_nested_content_rearms_empty_notification_with_real_scanner(tmp_path):
+    events = defaultdict(list)
+    nested_folder = tmp_path / "nested"
+    nested_folder.mkdir()
+    nested_video = nested_folder / "clip.mp4"
+    nested_video.write_bytes(b"video")
+
+    class UploadingManager:
+        state_manager = None
+
+        def needs_client_refresh(self):
+            return False
+
+        def upload_video(self, filepath, progress_callback=None, watch_root=None):
+            assert filepath == str(nested_video)
+            assert watch_root == str(tmp_path)
+            return True, "Uploaded", "video-id"
+
+    controller = WatchController(
+        upload_manager=UploadingManager(),
+        auth_manager=FakeAuthManager(),
+        batch_uploader=BatchUploader(UploadingManager(), FileHandler()),
+        callbacks=make_callbacks(events),
+    )
+    controller.watch_folder = str(tmp_path)
+    controller.set_scan_subdirectories(True)
+
+    controller._perform_folder_check()
+    nested_video.unlink()
+    controller._perform_folder_check()
+
+    assert events["notify_upload_success"] == ["clip.mp4"]
     assert events["notify_empty"] == [True]
 
 

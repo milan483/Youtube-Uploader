@@ -14,7 +14,7 @@ This document describes the current runtime architecture, module boundaries, and
 2. `AuthManager` initializes YouTube client and playlist cache.
 3. GUI builds `WatchController` and wires callback maps.
 4. `WatchController` runs polling loop and calls `BatchUploader`.
-5. `BatchUploader` calls `UploadManager.upload_video(...)` per file.
+5. `BatchUploader` calls `UploadManager.upload_video(..., watch_root=folder_path)` per file.
 6. `UploadManager` performs upload, retry/quota handling, playlist add, and safe move.
 7. `StateManager` persists upload/quota/retry/preferences/sort state through `storage/*`.
 
@@ -121,6 +121,15 @@ This document describes the current runtime architecture, module boundaries, and
 - `warmup_connection() -> bool`
 - `on_warmup_failed()`
 
+## Watch discovery and archive contract
+
+- `FileHandler.get_video_files(directory_path, recursive=False)` returns sorted paths relative to the selected root. The default returns top-level basenames; recursive mode includes relative subdirectories.
+- `BatchUploader.upload_folder(..., recursive=False)` validates discovered entries and propagates the watch root explicitly. Retry-state keys and per-file callback paths remain the joined source paths.
+- `UploadManager.upload_video(filepath, progress_callback=None, watch_root=None)` archives watch batches beneath `<watch_root>/Uploaded/<relative_source_path>`. Without a watch root, manual single-file uploads retain sibling `Uploaded` behavior.
+- Scanning excludes dot-prefixed files/directories, directory and file symlinks, and all directories named `Uploaded` (case-insensitive). Legacy nested archives remain in place and are excluded; no migration occurs.
+- Source containment and archive ancestors are checked before upload and moving. Archive publication does not replace an existing file. Cross-volume copies use hidden staging files and are verified before publication; failed copies retain the source.
+- `scan_subdirectories` is a persisted boolean, default false. The GUI transfers its value to the controller on the UI thread; periodic and manual checks snapshot the same plain controller setting.
+
 ## UploadManager/StateManager Contract
 
 When available, `BatchUploader` assumes `upload_manager.state_manager` implements:
@@ -169,6 +178,7 @@ Notes:
 - Writes are atomic (temp file + replace/rename).
 - Malformed JSON files are backed up with `.corrupt.<timestamp>`.
 - Schema-invalid payloads are logged and treated as empty state.
+- `scan_subdirectories` defaults to false for both new and existing preferences.
 - `auto_close_when_empty` is currently persisted/validated but not enforced by runtime logic.
 
 ## Threading Model
@@ -183,7 +193,7 @@ Notes:
 - OAuth tokens are persisted in `token.pickle`.
 - `token.pickle` is loaded via Python `pickle`; this assumes trusted local file integrity.
 - On Windows with `pywin32`, ACL hardening attempts owner-only access.
-- Path validation helper exists (`FileHandler.validate_path`) but is not currently enforced in the watch/upload path.
+- Watch batches validate source containment and reject symlinks and archive entries before upload. Archive paths are checked for symlink redirection before upload and moving. These checks assume the local tree is not being maliciously replaced between checks and file operations.
 - Logs should not include OAuth credentials/tokens.
 - Quota cooldown gating is enforced by watch-mode batch flow; manual actions can still hit API quota errors.
 

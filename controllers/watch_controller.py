@@ -20,6 +20,7 @@ class WatchController(LoggerMixin):
         self._folder_state_lock = threading.RLock()
         self._watch_folder = ""
         self._normalized_watch_folder = ""
+        self._scan_subdirectories = False
         self._folder_generation = 0
         self._empty_notification_armed = False
         self._check_lock = threading.Lock()
@@ -42,6 +43,11 @@ class WatchController(LoggerMixin):
 
     def set_callbacks(self, callbacks):
         self.callbacks = callbacks or {}
+
+    def set_scan_subdirectories(self, enabled):
+        """Set the plain scan option from the UI thread."""
+        with self._folder_state_lock:
+            self._scan_subdirectories = bool(enabled)
 
     def set_logger(self, logger):
         self.logger = logger
@@ -121,6 +127,7 @@ class WatchController(LoggerMixin):
             with self._folder_state_lock:
                 watch_folder = self._watch_folder
                 folder_generation = self._folder_generation
+                recursive = bool(self._scan_subdirectories)
 
             batch_counts = {'success': 0, 'fail': 0, 'skip': 0, 'size': 0}
             flags = {'cancelled': False, 'empty': False}
@@ -217,7 +224,8 @@ class WatchController(LoggerMixin):
             self.batch_uploader.upload_folder(
                 watch_folder,
                 callbacks=callbacks,
-                should_stop=lambda: self.should_stop
+                should_stop=lambda: self.should_stop,
+                recursive=recursive
             )
 
             if flags['cancelled'] or flags['empty']:

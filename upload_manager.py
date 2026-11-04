@@ -9,6 +9,7 @@ from utils.logging import LoggerMixin
 from utils.config_utils import format_file_size, get_uploaded_folder_path
 from services.batch_uploader import BatchUploader
 from services.playlist_service import PlaylistService
+from file_handler import FileHandler
 
 
 class UploadError(Exception):
@@ -135,9 +136,61 @@ class UploadManager(LoggerMixin):
         self.state_manager.record_quota_hit()
         self._log(config.INFO_QUOTA_EXCEEDED)
 
-    def upload_video(self, filepath, progress_callback=None):
+    @staticmethod
+    def _is_safe_archive_destination(destination, watch_root):
+        """Reject archive paths that escape the selected root or cross symlinks."""
+        root = os.path.abspath(watch_root)
+        destination = os.path.abspath(destination)
+        try:
+            if os.path.normcase(os.path.commonpath([root, destination])) != os.path.normcase(root):
+                return False
+        except (ValueError, OSError):
+            return False
+
+        # The selected root and every existing archive ancestor must be real
+        # directories/files, not symlinks that redirect the archive elsewhere.
+        if FileHandler._is_link_or_junction(root):
+            return False
+        relative = os.path.relpath(destination, root)
+        current = root
+        if relative != os.curdir:
+            for part in relative.split(os.sep):
+                current = os.path.join(current, part)
+                if FileHandler._is_link_or_junction(current):
+                    return False
+
+        real_root = os.path.realpath(root)
+        real_destination = os.path.realpath(destination)
+        try:
+            return os.path.normcase(os.path.commonpath([real_root, real_destination])) == os.path.normcase(real_root)
+        except (ValueError, OSError):
+            return False
+
+    def upload_video(self, filepath, progress_callback=None, watch_root=None):
         """Uploads a video file to YouTube. Returns (success, message, video_id)."""
         filename = os.path.basename(filepath)
+
+        if watch_root is not None:
+            # This check deliberately precedes file access, hashing, retry state,
+            # and all YouTube interaction. Call the class static method so fake
+            # file-handler instances used by batch callers need not implement it.
+            absolute_filepath = os.path.abspath(filepath)
+            absolute_watch_root = os.path.abspath(watch_root)
+            if not FileHandler.is_safe_watch_file(absolute_filepath, absolute_watch_root):
+                return False, f"Unsafe watch-folder path: {filepath}", None
+
+            relative_path = os.path.relpath(
+                os.path.abspath(filepath), os.path.abspath(watch_root)
+            )
+            relative_parts = relative_path.split(os.sep)
+            if (os.path.isabs(relative_path) or not relative_parts or
+                    any(part in (os.curdir, os.pardir, '') for part in relative_parts)):
+                return False, f"Unsafe watch-folder path: {filepath}", None
+
+            uploaded_folder = get_uploaded_folder_path(watch_root)
+            archive_destination = os.path.join(uploaded_folder, relative_path)
+            if not self._is_safe_archive_destination(archive_destination, watch_root):
+                return False, f"Unsafe archive path for {filename}", None
 
         if not os.path.isfile(filepath):
             return False, f"File not found: {filename}", None
@@ -301,18 +354,39 @@ class UploadManager(LoggerMixin):
                 playlist_warning = f"Playlist add failed: {str(e)}"
                 self._log(playlist_warning)
 
-        watch_folder = os.path.dirname(filepath)
-        uploaded_folder = get_uploaded_folder_path(watch_folder)
+        if watch_root is None:
+            watch_folder = os.path.dirname(filepath)
+            uploaded_folder = get_uploaded_folder_path(watch_folder)
+            destination = os.path.join(uploaded_folder, filename)
+        else:
+            # Revalidate after the network upload, before creating or moving into
+            # the archive, in case the tree changed while the request was active.
+            uploaded_folder = os.path.dirname(archive_destination)
+            destination = archive_destination
+            if not self._is_safe_archive_destination(destination, watch_root):
+                self._log(f"Warning: Unsafe archive path for {filename}; original file remains.")
+                uploaded_folder = None
 
-        if not self.file_handler.ensure_directory_exists(uploaded_folder):
+        if uploaded_folder is not None and not self.file_handler.ensure_directory_exists(uploaded_folder):
             self._log(f"Warning: Could not create Uploaded folder: {uploaded_folder}")
+            uploaded_folder = None
 
-        destination = os.path.join(uploaded_folder, filename)
-        move_success, move_msg = self.file_handler.safe_move(filepath, destination, file_hash)
+        if uploaded_folder is not None:
+            if watch_root is not None:
+                source_is_safe = FileHandler.is_safe_watch_file(
+                    os.path.abspath(filepath), os.path.abspath(watch_root)
+                )
+                destination_is_safe = self._is_safe_archive_destination(destination, watch_root)
+                if not source_is_safe or not destination_is_safe:
+                    self._log(f"Warning: Unsafe watch-folder or archive path for {filename}; original file remains.")
+                    uploaded_folder = None
 
-        if not move_success:
-            self._log(f"Warning: {move_msg}")
-            self._log("File was uploaded but could not be moved. Original file remains.")
+        if uploaded_folder is not None:
+            move_success, move_msg = self.file_handler.safe_move(filepath, destination, file_hash)
+
+            if not move_success:
+                self._log(f"Warning: {move_msg}")
+                self._log("File was uploaded but could not be moved. Original file remains.")
 
         self.state_manager.add_upload_to_history(file_hash, filename, video_id)
         self.state_manager.set_upload_state(filepath, 'completed')

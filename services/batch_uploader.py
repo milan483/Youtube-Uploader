@@ -1,6 +1,8 @@
 import os
+import ntpath
 from datetime import datetime
 import config
+from file_handler import FileHandler
 from utils.logging import LoggerMixin
 from utils.upload_utils import is_skip_message
 
@@ -11,7 +13,7 @@ class BatchUploader(LoggerMixin):
         self.file_handler = file_handler
         self.logger = logger
 
-    def upload_folder(self, folder_path, callbacks=None, should_stop=None):
+    def upload_folder(self, folder_path, callbacks=None, should_stop=None, recursive=False):
         from upload_manager import QuotaExceededError
 
         callbacks = callbacks or {}
@@ -27,7 +29,20 @@ class BatchUploader(LoggerMixin):
         if refresh_client and self.upload_manager.needs_client_refresh():
             refresh_client()
 
-        video_files = self.file_handler.get_video_files(folder_path)
+        discovered_files = self.file_handler.get_video_files(folder_path, recursive=recursive)
+        video_files = []
+        for relative_path in discovered_files:
+            # Treat discovery output as untrusted, including foreign-platform paths.
+            if (os.path.isabs(relative_path) or ntpath.isabs(relative_path)
+                    or ntpath.splitdrive(relative_path)[0]
+                    or '..' in relative_path.replace('\\', '/').split('/')):
+                self._log(f"Ignoring unsafe watch-folder entry: {relative_path}")
+                continue
+            filepath = os.path.join(folder_path, relative_path)
+            if not FileHandler.is_safe_watch_file(filepath, folder_path):
+                self._log(f"Ignoring unsafe watch-folder entry: {relative_path}")
+                continue
+            video_files.append(relative_path)
         results['total_files'] = len(video_files)
 
         if not video_files:
@@ -113,6 +128,13 @@ class BatchUploader(LoggerMixin):
                     on_batch_stopped(results['success_count'], total_files)
                 break
 
+            if not FileHandler.is_safe_watch_file(filepath, folder_path):
+                results['fail_count'] += 1
+                on_file_error = callbacks.get('on_file_error')
+                if on_file_error:
+                    on_file_error(filepath, ValueError("Unsafe watch-folder path"))
+                continue
+
             on_file_start = callbacks.get('on_file_start')
             if on_file_start:
                 on_file_start(filepath, index, total_files)
@@ -126,7 +148,8 @@ class BatchUploader(LoggerMixin):
             try:
                 success, message, video_id = self.upload_manager.upload_video(
                     filepath,
-                    progress_callback=upload_progress_callback
+                    progress_callback=upload_progress_callback,
+                    watch_root=folder_path
                 )
 
                 if success:
