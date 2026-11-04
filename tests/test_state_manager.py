@@ -34,6 +34,17 @@ def test_initializes_empty_state_when_files_missing(configured_state_files):
     assert manager.upload_states == {}
     assert manager.quota_state == {}
     assert manager.playlist_sort_state == {}
+    assert manager.get_all_preferences()["scan_subdirectories"] is False
+
+
+def test_scan_subdirectories_preference_persists_and_reloads(configured_state_files):
+    manager = StateManager()
+    manager.set_preference("scan_subdirectories", True)
+
+    reloaded_manager = StateManager()
+
+    assert reloaded_manager.get_preference("scan_subdirectories") is True
+    assert reloaded_manager.get_all_preferences()["scan_subdirectories"] is True
 
 
 def test_corrupted_history_creates_backup_and_resets(configured_state_files):

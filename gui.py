@@ -260,6 +260,19 @@ class YouTubeUploaderGUI:
             "Useful for running silently in the background"
         )
 
+        self.scan_subdirectories_var = tk.BooleanVar(value=False)
+        scan_subdirectories_check = ttk.Checkbutton(
+            automation_frame,
+            text="Scan subdirectories",
+            variable=self.scan_subdirectories_var,
+            command=self._on_scan_subdirectories_changed
+        )
+        scan_subdirectories_check.grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        create_tooltip(
+            scan_subdirectories_check,
+            "Also scan folders inside the watch folder for videos"
+        )
+
         # Notify when empty checkbox
         self.notify_when_empty_var = tk.BooleanVar(value=config.DEFAULT_NOTIFY_WHEN_EMPTY)
         notify_empty_check = ttk.Checkbutton(
@@ -525,6 +538,9 @@ class YouTubeUploaderGUI:
         self.autonomous_mode_var.set(prefs.get('autonomous_mode', config.DEFAULT_AUTONOMOUS_MODE))
         self.auto_start_watching_var.set(prefs.get('auto_start_watching', config.DEFAULT_AUTO_START_WATCHING))
         self.start_minimized_var.set(prefs.get('start_minimized', config.DEFAULT_START_MINIMIZED))
+        scan_subdirectories = prefs.get('scan_subdirectories', False)
+        self.scan_subdirectories_var.set(scan_subdirectories)
+        self.watch_controller.set_scan_subdirectories(scan_subdirectories)
         self.notify_when_empty_var.set(prefs.get('notify_when_empty', config.DEFAULT_NOTIFY_WHEN_EMPTY))
         self.start_with_windows_var.set(prefs.get('start_with_windows', False))
 
@@ -615,6 +631,12 @@ class YouTubeUploaderGUI:
                 )
         else:
             self.log("Empty folder notifications disabled")
+
+    def _on_scan_subdirectories_changed(self):
+        scan_subdirectories = bool(self.scan_subdirectories_var.get())
+        self.watch_controller.set_scan_subdirectories(scan_subdirectories)
+        self._save_preference('scan_subdirectories', scan_subdirectories)
+        self.log(f"Subdirectory scanning {'enabled' if scan_subdirectories else 'disabled'}")
 
     def _on_start_with_windows_changed(self):
         """Handler for start with Windows checkbox."""

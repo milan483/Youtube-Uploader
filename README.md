@@ -391,8 +391,8 @@ Choose from popular YouTube categories:
 ## Data Integrity Guarantees
 
 ### File Safety
-1. **Same-drive fast path**: File is atomically renamed into `Uploaded/` when possible
-2. **Cross-drive/fallback path**: File is copied to `Uploaded/` and hash-verified
+1. **Same-drive fast path**: File is published into `Uploaded/` without replacing an existing archive file, then removed from its source path
+2. **Cross-drive/fallback path**: File is copied to a hidden staging file and hash-verified before publication in `Uploaded/`
 3. **Delete original**: Original is deleted only after successful copy verification (with retry logic)
 4. **On failure**: Original file is preserved
 
@@ -582,6 +582,7 @@ Everyone else: No access
 ```json
 {
   "last_watch_folder": "C:/Videos/ToUpload",
+  "scan_subdirectories": false,
   "privacy_setting": "unlisted",
   "playlist_title": "My Gaming Clips",
   "video_category": "Gaming",
@@ -597,6 +598,10 @@ Everyone else: No access
   "notify_batch_complete": false
 }
 ```
+
+`scan_subdirectories` defaults to `false`, including for existing preferences that lack the field. Enable **Scan subdirectories** in the watch-folder settings to discover nested clips. Both periodic scans and **Force Check Now** use this setting. For example, `Clips/Game/clip.mp4` is archived as `Clips/Uploaded/Game/clip.mp4`; top-level clips still go directly into `Clips/Uploaded/`. Manual **Upload File...** keeps its sibling Uploaded-folder behavior.
+
+Recursive discovery excludes dot-prefixed entries, file and directory symlinks, and every directory named `Uploaded` (case-insensitive). Older nested Uploaded archives stay where they are and are excluded from scanning. Archive collisions receive a unique suffix; existing archived clips are never overwritten. Failed copies retain the original and are not published as completed archive videos. No archive cleanup or deletion UI is included in this phase.
 
 `auto_close_when_empty` is currently stored/validated as a preference but not yet enforced by runtime behavior.
 

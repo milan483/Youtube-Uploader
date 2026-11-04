@@ -1,50 +1,50 @@
 # Implementation Roadmap
 
-This is a planning document, not authorization to implement every item. Each item should receive its own bounded task specification before Codex starts work.
+This is a planning document. A roadmap checkbox is not authorization to implement a phase; Codex acts only on the active task linked from `codex_start_here.md`.
 
-## P0 — Notification correctness
+## P0 — Notification correctness (merged)
 
-- [ ] Deduplicate empty watch-folder notifications.
-- [ ] Avoid an empty notification on initial startup when the selected folder has no supported videos.
-- [ ] Use accurate notification wording; an empty supported-video scan does not prove every file was uploaded successfully.
+- [x] Deduplicate empty watch-folder notifications.
+- [x] Do not alert on initially empty folders.
+- [x] Use neutral wording when no supported videos were found.
 
-Active specification: [P0 empty-folder notification](../tasks/p0-empty-folder-notification.md).
+Completed in [PR #1](https://github.com/milan483/Youtube-Uploader/pull/1).
 
-## P1 — Recursive scanning and archive management
+## P1A — Recursive scanning and central archive (active)
 
-- [ ] Add configurable recursive scanning of nested directories. Preserve current behavior by default for existing installations unless the migration/default policy is explicitly decided.
-- [ ] Exclude the managed Uploaded archive from scanning to prevent re-upload loops.
-- [ ] Centralize successfully uploaded clips in one Uploaded archive while preserving each source file's relative directory structure.
-- [ ] Prevent filename collisions and avoid following directory symlinks or paths outside the selected watch root.
-- [ ] Add an Uploaded Clips Manager to browse archived files, show useful metadata/total size, and select individual or multiple clips for deletion.
-- [ ] Prefer moving deleted clips to the operating system Trash/Recycle Bin. Require confirmation for bulk deletion and constrain deletion to the managed archive.
-- [ ] Keep local clip deletion independent from the corresponding YouTube video.
+Detailed spec: [.ai/tasks/p1a-recursive-scan-and-archive.md](../tasks/p1a-recursive-scan-and-archive.md).
 
-## P1 — Upload reliability
+- [ ] Optional recursive scan (default off for backward compatibility).
+- [ ] Exclude root and nested Uploaded archives, outside-root symlinks, and unsafe paths.
+- [ ] Centralize successful watch-mode archives beneath `<watch_root>/Uploaded/`, preserving relative subdirectories.
+- [ ] Ensure file collisions and failures never overwrite/delete originals.
+- [ ] Preserve existing watch/retry/manual-upload behavior and add focused tests.
 
-- [ ] Classify relevant SSL/TLS EOF and connection-reset failures as transient network errors.
-- [ ] Recover interrupted resumable uploads using the existing upload session and confirmed server offset where supported, rather than blindly restarting the entire transfer.
-- [ ] Preserve retry counts and upload state across retries and application restarts.
-- [ ] Prevent concurrent duplicate uploads of the same file and verify completion before starting another upload attempt.
-- [ ] Add deterministic tests for interruption, recovery, duplicate prevention, and retry exhaustion.
+## P1B — Uploaded Clips Manager (queued after P1A review)
 
-## P1 — Linux desktop support
+Preliminary spec: [.ai/tasks/p1b-uploaded-clips-manager.md](../tasks/p1b-uploaded-clips-manager.md).
 
-- [ ] Separate core dependencies from Windows-only dependencies.
-- [ ] Implement native Linux desktop notifications.
-- [ ] Verify system tray behavior and safe fallback under KDE Plasma Wayland; never hide the main window if a usable tray entry was not created.
-- [ ] Use appropriate XDG configuration, data, and state directories for persistent files.
-- [ ] Apply restrictive POSIX permissions to OAuth token material and review token serialization.
-- [ ] Add Linux installation documentation and CI coverage. Treat KDE Plasma Wayland as an explicit test target while preserving Windows functionality.
+- [ ] Browse/archive size and multi-select in a management dialog.
+- [ ] Manually send selected local archived clips to Trash/Recycle Bin with confirmation.
+- [ ] Prevent deletion outside the managed archive or of in-progress clips.
+- [ ] Preserve upload history and remote YouTube content.
+- [ ] Add deterministic safety tests and Windows UI smoke verification.
 
-## Delivery and review
+## P1C — Upload reliability (not started)
 
-For each item or coherent group of items:
+- [ ] Recognize SSL/TLS EOF and relevant connection-reset failures as transient errors.
+- [ ] Recover resumable upload sessions and offsets where supported.
+- [ ] Preserve retry counters and prevent concurrent duplicate uploads.
+- [ ] Add interruption, retry-exhaustion, and deduplication regression tests.
 
-1. Research and resolve design choices in ChatGPT.
-2. Create a bounded task file under .ai/tasks/.
-3. Update codex_start_here.md to point to the active task.
-4. Implement and verify on a dedicated branch.
-5. Publish a draft PR with changed files, test commands/results, and limitations.
-6. Have ChatGPT independently review the latest diff and CI.
-7. Merge only after the user's explicit approval.
+## P1D — Linux desktop support (not started)
+
+- [ ] Separate cross-platform versus Windows-only dependencies.
+- [ ] Implement Linux desktop notifications.
+- [ ] Verify safe tray behavior/fallback on KDE Plasma Wayland.
+- [ ] Use XDG directories and restrictive POSIX token permissions.
+- [ ] Add Linux installation docs, CI, and platform-level smoke coverage.
+
+## Delivery requirements
+
+For each new phase: ChatGPT inspects current code and records the bounded task → Codex implements/tests on a dedicated branch and updates one draft PR → ChatGPT reviews its latest diff, report, and available CI → user explicitly approves merges. Do not duplicate open tasks/PRs.

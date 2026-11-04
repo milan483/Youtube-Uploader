@@ -223,6 +223,7 @@ class StateManager(LoggerMixin):
     def get_all_preferences(self):
         defaults = {
             'last_watch_folder': '',
+            'scan_subdirectories': False,
             'privacy_setting': config.DEFAULT_PRIVACY_SETTING,
             'playlist_title': 'No Playlist',
             'video_category': config.DEFAULT_VIDEO_CATEGORY,

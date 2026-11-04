@@ -73,6 +73,11 @@ def test_load_json_with_validation_returns_empty_on_schema_failure(tmp_path):
             {"privacy_setting": "private", "notify_quota_exceeded": True},
             {"privacy_setting": "private", "notify_quota_exceeded": "true"},
         ),
+        (
+            PreferencesStore,
+            {"privacy_setting": "private", "notify_quota_exceeded": True, "scan_subdirectories": False},
+            {"privacy_setting": "private", "notify_quota_exceeded": True, "scan_subdirectories": "true"},
+        ),
     ],
 )
 def test_schema_validators_accept_valid_and_reject_invalid(store_cls, valid_payload, invalid_payload):

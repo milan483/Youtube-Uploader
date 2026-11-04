@@ -1,6 +1,7 @@
 import hashlib
 import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 import config
@@ -18,6 +19,19 @@ class FileHandler(LoggerMixin):
 
     def set_logger(self, logger):
         self.logger = logger
+
+    @staticmethod
+    def _is_link_or_junction(path):
+        try:
+            if os.path.islink(path):
+                return True
+            is_junction = getattr(os.path, "isjunction", None)
+            if is_junction and is_junction(path):
+                return True
+            attributes = os.lstat(path).st_file_attributes
+            return bool(attributes & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+        except (OSError, AttributeError):
+            return False
 
     def validate_path(self, filepath, base_dir=None):
         try:
@@ -192,18 +206,33 @@ class FileHandler(LoggerMixin):
         except Exception:
             return False
 
+    def _unique_destination_path(self, destination_path):
+        """Return an unused collision name; publication still must be exclusive."""
+        dest_dir = os.path.dirname(destination_path)
+        filename = os.path.basename(destination_path)
+        name, ext = os.path.splitext(filename)
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        candidate = os.path.join(dest_dir, f"{name}_{timestamp}{ext}")
+        index = 1
+        while os.path.lexists(candidate):
+            candidate = os.path.join(dest_dir, f"{name}_{timestamp}_{index}{ext}")
+            index += 1
+        return candidate
+
+    def _publish_without_overwrite(self, staged_path, destination_path):
+        """Atomically publish a same-filesystem staging file without replacing a target."""
+        try:
+            os.link(staged_path, destination_path)
+        except FileExistsError:
+            return False
+        return True
+
     def safe_move(self, source_path, destination_path, cached_source_hash=None):
         import time
         try:
-            if os.path.exists(destination_path):
-                dest_dir = os.path.dirname(destination_path)
-                dest_filename = os.path.basename(destination_path)
-                name_without_ext, ext = os.path.splitext(dest_filename)
-                from datetime import datetime
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_filename = f"{name_without_ext}_{timestamp}{ext}"
-                destination_path = os.path.join(dest_dir, new_filename)
-                self._log(f"Destination file exists; using {new_filename} instead")
+            if not os.path.isfile(source_path) or self._is_link_or_junction(source_path):
+                return False, "Source is not a regular non-symlink file"
 
             dest_dir = os.path.dirname(destination_path)
             if dest_dir and not os.path.exists(dest_dir):
@@ -212,55 +241,108 @@ class FileHandler(LoggerMixin):
                 except Exception as e:
                     return False, f"Could not create destination directory: {e}"
 
-            same_drive = self._are_on_same_drive(source_path, destination_path)
+            original_destination = destination_path
+            index = 0
+            while True:
+                candidate = original_destination if index == 0 else self._unique_destination_path(original_destination)
+                index += 1
+                # lexists also detects dangling symlinks. Never write through or replace one.
+                if os.path.lexists(candidate):
+                    continue
 
-            if same_drive:
                 try:
-                    os.rename(source_path, destination_path)
+                    same_drive = self._are_on_same_drive(source_path, candidate)
+                    if same_drive:
+                        if os.name == "nt":
+                            # Windows rename is atomic and refuses an existing target.
+                            try:
+                                os.rename(source_path, candidate)
+                                msg = f"Successfully moved {os.path.basename(source_path)}"
+                                self._log(msg)
+                                return True, msg
+                            except FileExistsError:
+                                continue
+                        # Hard-link publication is atomic and fails if another process wins
+                        # the name between the existence check and publication.
+                        if self._publish_without_overwrite(source_path, candidate):
+                            published_destination = candidate
+                            break
+                        continue
+                except FileExistsError:
+                    continue
+                except OSError as e:
+                    self._log(f"Fast move failed ({e}), falling back to staged copy...")
+
+                # Cross-volume copies are written under a hidden, non-video suffix and
+                # verified before atomic no-clobber publication.
+                stage_fd, staged_path = tempfile.mkstemp(
+                    prefix=".upload-staging-", suffix=".part", dir=dest_dir or "."
+                )
+                os.close(stage_fd)
+                try:
+                    if not self.safe_copy_and_verify(source_path, staged_path, cached_source_hash):
+                        return False, "Copy or verification failed"
+                    if os.name == "nt":
+                        try:
+                            os.rename(staged_path, candidate)
+                            published = True
+                        except FileExistsError:
+                            published = False
+                    else:
+                        try:
+                            published = self._publish_without_overwrite(staged_path, candidate)
+                        except FileExistsError:
+                            published = False
+                    if not published:
+                        continue
+                    published_destination = candidate
+                    # The verified destination is complete before the source is removed.
+                    break
+                finally:
+                    try:
+                        if os.path.lexists(staged_path):
+                            os.remove(staged_path)
+                    except OSError as cleanup_error:
+                        self._log(f"Warning: Could not clean up staging file {staged_path}: {cleanup_error}")
+
+            last_error = None
+            delay = config.INITIAL_FILE_OPERATION_DELAY
+            for attempt in range(config.MAX_FILE_OPERATION_RETRIES):
+                try:
+                    if attempt > 0:
+                        delay = min(
+                            config.INITIAL_FILE_OPERATION_DELAY * (2 ** attempt),
+                            config.MAX_FILE_OPERATION_DELAY
+                        )
+                    if delay > 0:
+                        time.sleep(delay)
+
+                    os.remove(source_path)
                     msg = f"Successfully moved {os.path.basename(source_path)}"
+                    if attempt > 0:
+                        msg += f" (after {attempt + 1} attempts)"
                     self._log(msg)
                     return True, msg
-                except OSError as e:
-                    self._log(f"Fast move failed ({e}), falling back to copy+verify...")
-                    same_drive = False
 
-            if not same_drive:
-                if not self.safe_copy_and_verify(source_path, destination_path, cached_source_hash):
-                    return False, "Copy or verification failed"
+                except PermissionError as e:
+                    last_error = e
+                    if attempt < config.MAX_FILE_OPERATION_RETRIES - 1:
+                        self._log(f"File locked (attempt {attempt + 1}/{config.MAX_FILE_OPERATION_RETRIES}), "
+                                f"retrying in {delay:.1f}s...")
+                except Exception as e:
+                    last_error = e
+                    if attempt < config.MAX_FILE_OPERATION_RETRIES - 1:
+                        self._log(f"Error deleting file (attempt {attempt + 1}/{config.MAX_FILE_OPERATION_RETRIES}): {str(e)}, "
+                                f"retrying in {delay:.1f}s...")
 
-                last_error = None
-                delay = config.INITIAL_FILE_OPERATION_DELAY
-                for attempt in range(config.MAX_FILE_OPERATION_RETRIES):
-                    try:
-                        if attempt > 0:
-                            delay = min(
-                                config.INITIAL_FILE_OPERATION_DELAY * (2 ** attempt),
-                                config.MAX_FILE_OPERATION_DELAY
-                            )
-                        if delay > 0:
-                            time.sleep(delay)
-
-                        os.remove(source_path)
-                        msg = f"Successfully moved {os.path.basename(source_path)}"
-                        if attempt > 0:
-                            msg += f" (after {attempt + 1} attempts)"
-                        self._log(msg)
-                        return True, msg
-
-                    except PermissionError as e:
-                        last_error = e
-                        if attempt < config.MAX_FILE_OPERATION_RETRIES - 1:
-                            self._log(f"File locked (attempt {attempt + 1}/{config.MAX_FILE_OPERATION_RETRIES}), "
-                                    f"retrying in {delay:.1f}s...")
-                    except Exception as e:
-                        last_error = e
-                        if attempt < config.MAX_FILE_OPERATION_RETRIES - 1:
-                            self._log(f"Error deleting file (attempt {attempt + 1}/{config.MAX_FILE_OPERATION_RETRIES}): {str(e)}, "
-                                    f"retrying in {delay:.1f}s...")
-
-                msg = f"Could not delete original file: {str(last_error)}"
-                self._log(msg)
-                return False, msg
+            msg = f"Could not delete original file: {str(last_error)}"
+            try:
+                if os.path.lexists(published_destination):
+                    os.remove(published_destination)
+            except OSError as cleanup_error:
+                self._log(f"Could not remove published duplicate {published_destination}: {cleanup_error}")
+            self._log(msg)
+            return False, msg
 
         except Exception as e:
             msg = f"Error during safe move: {str(e)}"
@@ -278,22 +360,100 @@ class FileHandler(LoggerMixin):
             self._log(f"Error creating directory {directory_path}: {str(e)}")
             return False
 
-    def get_video_files(self, directory_path):
+    @staticmethod
+    def is_safe_watch_file(filepath, watch_root):
+        """Validate a regular file inside a watch tree without symlink paths."""
         try:
-            if not os.path.isdir(directory_path):
+            raw_file = os.fspath(filepath)
+            raw_root = os.fspath(watch_root)
+            if ".." in Path(raw_file).parts or ".." in Path(raw_root).parts:
+                return False
+
+            def normalize_without_symlinks(raw_path):
+                path = Path(raw_path)
+                if not path.is_absolute():
+                    path = Path.cwd() / path
+                current = Path(path.anchor)
+                for part in path.parts[1:]:
+                    if part in ("", "."):
+                        continue
+                    if part == "..":
+                        if FileHandler._is_link_or_junction(current):
+                            raise ValueError("symlink path component")
+                        current = current.parent
+                        continue
+                    current /= part
+                    if FileHandler._is_link_or_junction(current):
+                        raise ValueError("symlink path component")
+                return current
+
+            file_path = normalize_without_symlinks(raw_file)
+            root_path = normalize_without_symlinks(raw_root)
+            if not root_path.is_dir():
+                return False
+            relative = file_path.relative_to(root_path)
+            if not relative.parts or any(
+                part.startswith(".") or part.casefold() == "uploaded"
+                for part in relative.parts
+            ):
+                return False
+
+            current = root_path
+            for part in relative.parts:
+                current = current / part
+                if FileHandler._is_link_or_junction(current):
+                    return False
+            if not file_path.is_file():
+                return False
+            # Resolve as a final guard against path traversal and platform oddities.
+            file_path.resolve(strict=True).relative_to(root_path.resolve(strict=True))
+            return True
+        except (OSError, ValueError, TypeError):
+            return False
+
+    def get_video_files(self, directory_path, recursive=False):
+        try:
+            root = Path(os.path.abspath(directory_path))
+            if not root.is_dir() or self._is_link_or_junction(root):
                 self._log(f"Not a directory: {directory_path}")
                 return []
-            
-            all_files = os.listdir(directory_path)
-            
-            video_files = [
-                f for f in all_files
-                if is_supported_video_file(f) and
-                   os.path.isfile(os.path.join(directory_path, f))
-            ]
-            
+            root_component = Path(root.anchor)
+            for component in root.parts[1:]:
+                root_component /= component
+                if self._is_link_or_junction(root_component):
+                    self._log(f"Watch directory has a symlink ancestor: {root_component}")
+                    return []
+
+            video_files = []
+
+            def scan(directory):
+                try:
+                    entries = list(os.scandir(directory))
+                except PermissionError:
+                    self._log(f"Permission denied accessing directory: {directory}")
+                    return
+                except OSError as error:
+                    self._log(f"Could not access directory {directory}: {error}")
+                    return
+
+                for entry in entries:
+                    name = entry.name
+                    if name.startswith(".") or name.casefold() == "uploaded":
+                        continue
+                    try:
+                        if self._is_link_or_junction(entry.path):
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            if recursive:
+                                scan(entry.path)
+                        elif entry.is_file(follow_symlinks=False) and is_supported_video_file(name):
+                            relpath = os.path.relpath(entry.path, root)
+                            video_files.append(relpath)
+                    except OSError as error:
+                        self._log(f"Could not inspect {entry.path}: {error}")
+
+            scan(str(root))
             video_files.sort()
-            
             self._log(f"Found {len(video_files)} video file(s) in {directory_path}")
             return video_files
             
