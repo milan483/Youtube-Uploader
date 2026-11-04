@@ -2,6 +2,8 @@ import hashlib
 import os
 from pathlib import Path
 
+import pytest
+
 from file_handler import FileHandler
 
 
@@ -137,6 +139,7 @@ def test_safe_move_collision_never_overwrites_and_repeated_names_are_unique(tmp_
     assert {path.read_bytes() for path in archived} == {b"first", b"second", b"third"}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX hard-link publication path")
 def test_safe_move_retries_if_destination_appears_during_publication(tmp_path, monkeypatch):
     handler = FileHandler()
     source = tmp_path / "source.mp4"
@@ -247,6 +250,9 @@ def test_failed_source_removal_preserves_original_and_rolls_back_duplicate(tmp_p
     write_binary_file(source, b"original")
     monkeypatch.setattr(config, "INITIAL_FILE_OPERATION_DELAY", 0)
     monkeypatch.setattr(config, "MAX_FILE_OPERATION_RETRIES", 1)
+    # Force the cross-volume copy path, which reaches source removal on Windows
+    # as well as POSIX. Same-volume Windows rename consumes the source atomically.
+    monkeypatch.setattr(handler, "_are_on_same_drive", lambda *_: False)
     real_remove = os.remove
 
     def locked_remove(path):
