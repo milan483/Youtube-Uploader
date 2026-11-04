@@ -1,5 +1,6 @@
 import io
 import os
+import ssl
 
 import pytest
 
@@ -13,28 +14,36 @@ class DummyMediaFileUpload:
 
 
 class SequencedRequest:
-    def __init__(self, outcome):
-        self.outcome = outcome
+    def __init__(self, outcomes):
+        self.outcomes = outcomes
+        self.chunk_calls = 0
 
-    def execute(self):
-        if isinstance(self.outcome, Exception):
-            raise self.outcome
-        return self.outcome
+    def next_chunk(self):
+        self.chunk_calls += 1
+        if not self.outcomes:
+            raise AssertionError("No configured outcomes left")
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        if isinstance(outcome, tuple):
+            return outcome
+        return None, outcome
 
 
 class SequencedYouTube:
     def __init__(self, outcomes):
         self.outcomes = list(outcomes)
         self.insert_calls = []
+        self.requests = []
 
     def videos(self):
         return self
 
     def insert(self, **kwargs):
         self.insert_calls.append(kwargs)
-        if not self.outcomes:
-            raise AssertionError("No configured outcomes left")
-        return SequencedRequest(self.outcomes.pop(0))
+        request = SequencedRequest(self.outcomes)
+        self.requests.append(request)
+        return request
 
 
 class FakeFileHandler:
@@ -340,7 +349,8 @@ def test_upload_video_retries_transient_error_then_succeeds(monkeypatch, tmp_pat
 
     assert success is True
     assert video_id == "vid-2"
-    assert len(youtube.insert_calls) == 2
+    assert len(youtube.insert_calls) == 1
+    assert youtube.requests[0].chunk_calls == 2
     assert failed_states == []
 
 
@@ -405,3 +415,74 @@ def test_watch_upload_rejects_junction_like_archive_before_network(monkeypatch, 
     assert "Unsafe archive" in message
     assert youtube.insert_calls == []
     assert source.read_bytes() == b"clip"
+
+
+def test_ssl_eof_recovers_in_same_resumable_session(monkeypatch, tmp_path):
+    error = ssl.SSLEOFError(8, "EOF occurred in violation of protocol (_ssl.c:2396)")
+    manager, filepath, youtube, _, state = build_upload_manager(
+        monkeypatch, tmp_path, outcomes=[error, {"id": "eof-recovered"}]
+    )
+
+    success, _, video_id = manager.upload_video(filepath)
+
+    assert success is True and video_id == "eof-recovered"
+    assert manager._is_transient_network_error(error)
+    assert len(youtube.insert_calls) == 1
+    assert youtube.requests[0].chunk_calls == 2
+    assert state.history_calls == [("abc123", "video.mp4", "eof-recovered")]
+
+
+def test_chunk_progress_and_resume_keep_same_request(monkeypatch, tmp_path):
+    class Progress:
+        def __init__(self, fraction):
+            self.fraction = fraction
+
+        def progress(self):
+            return self.fraction
+
+    manager, filepath, youtube, _, _ = build_upload_manager(
+        monkeypatch,
+        tmp_path,
+        outcomes=[
+            (Progress(0.25), None),
+            ConnectionResetError("connection reset by peer"),
+            (Progress(0.75), None),
+            {"id": "recovered"},
+        ],
+    )
+    progress = []
+
+    success, _, video_id = manager.upload_video(filepath, progress_callback=progress.append)
+
+    assert success and video_id == "recovered"
+    assert progress == [25, 75]
+    assert len(youtube.insert_calls) == 1
+    assert youtube.requests[0].chunk_calls == 4
+
+
+def test_scheduled_failure_does_not_reset_existing_retry_count(monkeypatch, tmp_path):
+    manager, filepath, youtube, _, state = build_upload_manager(
+        monkeypatch, tmp_path, outcomes=[Exception("backend unavailable")],
+        state_manager=FakeStateManager(retry_counts={str(tmp_path / "video.mp4"): 2}),
+    )
+
+    success, message, _ = manager.upload_video(filepath)
+
+    assert not success
+    assert "manual intervention required" in message.lower()
+    assert state.set_state_calls[-1]["retry_count"] == 3
+    assert len(youtube.insert_calls) == 1
+
+
+def test_tls_certificate_errors_are_not_mistaken_for_transient_eof(monkeypatch, tmp_path):
+    error = ssl.SSLCertVerificationError("certificate verify failed")
+    manager, filepath, youtube, _, _ = build_upload_manager(
+        monkeypatch, tmp_path, outcomes=[error]
+    )
+
+    success, _, _ = manager.upload_video(filepath)
+
+    assert not success
+    assert not manager._is_transient_network_error(error)
+    assert len(youtube.insert_calls) == 1
+    assert youtube.requests[0].chunk_calls == 1

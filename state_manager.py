@@ -56,12 +56,17 @@ class StateManager(LoggerMixin):
         return len(self.upload_history)
 
     def set_upload_state(self, filepath, state, retry_count=None, next_retry_time=None):
+        # Starting a scheduled retry must not reset the prior failure count.
+        # A completed upload intentionally discards the old retry metadata.
+        previous = self.upload_states.get(filepath, {})
         state_info = {
             'state': state,
             'timestamp': datetime.now().isoformat()
         }
-        if retry_count is not None:
-            state_info['retry_count'] = retry_count
+        if state in ('uploading', 'pending', 'failed'):
+            count = retry_count if retry_count is not None else previous.get('retry_count')
+            if count is not None:
+                state_info['retry_count'] = count
         if next_retry_time is not None:
             state_info['next_retry_time'] = next_retry_time
 
@@ -233,6 +238,7 @@ class StateManager(LoggerMixin):
             'notify_when_empty': config.DEFAULT_NOTIFY_WHEN_EMPTY,
             'auto_close_when_empty': config.DEFAULT_AUTO_CLOSE_WHEN_EMPTY,
             'start_with_windows': False,
+            'start_on_login': False,
             'notify_upload_success': config.DEFAULT_NOTIFY_UPLOAD_SUCCESS,
             'notify_upload_failed': config.DEFAULT_NOTIFY_UPLOAD_FAILED,
             'notify_quota_exceeded': config.DEFAULT_NOTIFY_QUOTA_EXCEEDED,

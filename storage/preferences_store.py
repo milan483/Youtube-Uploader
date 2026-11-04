@@ -24,6 +24,7 @@ class PreferencesStore(LoggerMixin):
         optional_bool_fields = ['autonomous_mode', 'auto_start_watching', 'start_minimized',
                                'scan_subdirectories',
                                'notify_when_empty', 'auto_close_when_empty', 'start_with_windows',
+                               'start_on_login',
                                'notify_upload_success', 'notify_upload_failed', 'notify_quota_exceeded',
                                'notify_batch_complete']
 

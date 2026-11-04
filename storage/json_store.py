@@ -14,6 +14,7 @@ class JsonStore(LoggerMixin):
     def atomic_write_json(self, filepath, data):
         try:
             directory = os.path.dirname(filepath) or '.'
+            os.makedirs(directory, mode=0o700, exist_ok=True)
 
             with tempfile.NamedTemporaryFile(
                 mode='w',
