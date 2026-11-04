@@ -220,3 +220,11 @@ Notes:
 5. Retry scheduling fields persist and are honored.
 6. Preferences persist across restart (including automation and notification flags).
 7. Playlist sorting works and resume state is cleared/saved correctly.
+
+## P1C reliability notes
+
+- UploadManager serializes calls through a per-instance upload lock.
+- MediaFileUpload uses the resumable `next_chunk` API for one-chunk and multi-chunk uploads. A transient exception retries the same request object and its internal resumable URI/progress when available.
+- `StateManager.set_upload_state` preserves retry count across uploading/pending/failed transitions and clears retry state on completed.
+- SSL EOF is considered transient; certificate verification errors are not.
+- Sessions and their server resume offsets are not persisted between process restarts.

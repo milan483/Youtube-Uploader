@@ -94,3 +94,25 @@ def test_reset_incomplete_uploads_to_pending_only_for_existing_files(configured_
     assert reset_count == 1
     assert manager.get_upload_state(str(existing_file)) == "pending"
     assert manager.get_upload_state(str(missing_file)) == "uploading"
+
+
+def test_retry_count_survives_uploading_and_pending_transitions(configured_state_files):
+    manager = StateManager()
+    filepath = "/tmp/retrying.mp4"
+    manager.set_upload_state(
+        filepath, "failed", retry_count=2,
+        next_retry_time=(datetime.now() - timedelta(minutes=10)).isoformat()
+    )
+    assert manager.get_retry_count(filepath) == 2
+    assert manager.is_ready_for_retry(filepath)
+
+    manager.set_upload_state(filepath, "uploading")
+    assert manager.get_retry_count(filepath) == 2
+    assert manager.get_retry_info(filepath)["next_retry_time"] is None
+
+    manager.set_upload_state(filepath, "pending")
+    assert manager.get_retry_count(filepath) == 2
+
+    manager.set_upload_state(filepath, "completed")
+    assert manager.get_retry_count(filepath) == 0
+    assert manager.get_retry_info(filepath)["next_retry_time"] is None

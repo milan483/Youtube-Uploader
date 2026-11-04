@@ -668,3 +668,9 @@ For issues:
 5. Open an issue on GitHub
 
 **Remember**: All your upload history and state files are in JSON format and human-readable. You can inspect or manually edit them if needed!
+
+## Upload network recovery (P1C)
+
+Uploads use the Google client's resumable `next_chunk()` interface, including one-chunk uploads. Transient transport failures such as SSL EOF are retried on the **same** upload request/session where possible rather than restarting `videos.insert`. Retry limits still apply; exhausted attempts are scheduled in persistent upload state, including their cumulative retry count.
+
+An upload's resumable session is not preserved across application restarts. Certificate validation errors are not transient retry candidates. Upload retries avoid concurrent same-manager calls, but multiple independent application processes are not locked against each other.
