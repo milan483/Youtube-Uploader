@@ -231,3 +231,19 @@ Notes:
 - Under Wayland, `SystemTrayManager` attempts an Ayatana AppIndicator using GTK/GObject Introspection. It does not claim the icon is visible until a backend successfully initializes. If no usable tray backend exists, `WindowManager.minimize_to_tray` iconifies the window rather than withdrawing it.
 - `LinuxIntegration` creates and removes an XDG autostart desktop file; `gui.py` selects the appropriate platform integration and persists `start_on_login` separately from the legacy Windows preference.
 - `main.py` runs the existing `main.pyw` entry point for Linux. Windows startup remains unchanged.
+
+
+## P1B local archive management
+
+- `UploadedClipsManager` lists only supported video files under the selected watch root's central `Uploaded/`, rejecting hidden, symlinked, junction, and outside-root entries.
+- The Tkinter `UploadedClipsDialog` owns confirmation and UI state; filesystem listing and Trash operations run off the Tk main thread and return per-file results.
+- `FileHandler.archive_lock` serializes local archive moves with manager listing/deletion inside a single process. Cross-process filesystem races are outside this lock.
+- Trash is delegated to `send2trash`; there is no permanent-delete fallback. Cleanup does not update StateManager or YouTube.
+
+## P1C upload reliability
+
+- UploadManager serializes each `upload_video` operation with a per-instance lock.
+- Every upload uses a resumable `next_chunk` request. Transient errors retry the same request to retain library-managed upload URI and progress when available.
+- StateManager preserves retry count across failed, uploading and pending state transitions; completion clears retry metadata.
+- SSL EOF and connection resets are transient; certificate-verification errors are not.
+- Resumable session offsets are not persisted across application restarts.

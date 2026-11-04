@@ -1,15 +1,16 @@
 # Codex Start Here
 
-GitHub contains the durable task history. ChatGPT handles repository analysis and independent PR review. Codex Desktop handles bounded local implementation and verification. Do not duplicate PRs or merge without explicit user approval.
+This is the durable starting point for future implementation work. Follow [AGENTS.md](AGENTS.md) and [ARCHITECTURE.md](ARCHITECTURE.md). ChatGPT coordinates research/specification and independent GitHub review; Codex Desktop handles bounded local changes and verification. Do not merge or release without explicit user approval.
 
-## Status
-- P0 merged: PR #1.
-- P1A merged: PR #2.
-- P1B Uploaded Clips Manager: [PR #3](https://github.com/milan483/Youtube-Uploader/pull/3).
-- P1C Upload reliability: [PR #4](https://github.com/milan483/Youtube-Uploader/pull/4).
-- **P1D Linux desktop support:** code and tests prepared on `feat/p1d-linux-desktop` in this branch; CI and KDE Wayland smoke test pending.
+## Current development status
 
-Read [AGENTS.md](AGENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md) and [.ai/tasks/p1d-linux-desktop.md](.ai/tasks/p1d-linux-desktop.md).
+- P0 notification fix: merged in [PR #1](https://github.com/milan483/Youtube-Uploader/pull/1).
+- P1A recursive scanning and archive: merged in [PR #2](https://github.com/milan483/Youtube-Uploader/pull/2).
+- P1B, P1C and P1D: **implemented together** on `integration/p1-all` for final integration review. See [.ai/tasks/p1-complete-integration.md](.ai/tasks/p1-complete-integration.md).
+- The individual P1B/P1C/P1D branches and PRs #3–5 were used for isolated changes and CI; the combined PR supersedes them to avoid merge conflicts.
 
-## P1D verification follow-up
-Check the existing draft P1D PR, preserve local changes and do not start a new branch. Run `python -m pytest tests/test_linux_desktop.py -q` and `python -m pytest -q`. Inspect all Windows/Linux CI jobs and test actual KDE Plasma Wayland notification/tray/autostart behavior. Publish evidence and fixes on the existing PR. Do not touch P1B/P1C except for required merge-conflict integration after approved merges.
+## Next steps
+
+No new implementation task is active. Review the consolidated PR, check the GitHub Actions Windows/Linux matrix, and complete the real Windows Recycle Bin, live YouTube resumable upload, and KDE Plasma Wayland smoke checks if possible.
+
+For later tasks, create a bounded task specification under `.ai/tasks/`, update this entry point to it, and use one dedicated branch and draft PR. Never assume roadmap entries automatically authorize work.
