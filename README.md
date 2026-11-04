@@ -668,3 +668,26 @@ For issues:
 5. Open an issue on GitHub
 
 **Remember**: All your upload history and state files are in JSON format and human-readable. You can inspect or manually edit them if needed!
+
+
+## Linux / KDE Plasma Wayland (P1D)
+
+Core uploads and the Tkinter window can run on Linux. Windows-only Python dependencies are installed only on Windows. On Arch/CachyOS install the GTK AppIndicator integration and notification utility:
+
+```bash
+sudo pacman -S --needed python python-pip tk python-gobject libayatana-appindicator libnotify
+python -m venv --system-site-packages .venv
+source .venv/bin/activate.fish
+python -m pip install -r requirements.txt
+python main.py
+```
+
+The `--system-site-packages` option lets the virtual environment import the distro's `gi` bindings. The Linux Wayland tray uses AyatanaAppIndicator when available; otherwise minimizing falls back to the taskbar rather than hiding the only way to reopen the window. Notifications use `notify-send`. A **Start on login** checkbox manages an XDG autostart file in `~/.config/autostart`. Tray availability depends on the desktop's actual indicator support, which cannot be established by headless unit tests.
+
+Linux application data follows XDG directories:
+- Preferences and OAuth token: `$XDG_CONFIG_HOME/youtube-uploader` (default `~/.config/youtube-uploader`).
+- History, retry and quota metadata: `$XDG_STATE_HOME/youtube-uploader` (default `~/.local/state/youtube-uploader`).
+- The OAuth client JSON may be placed at `~/.config/youtube-uploader/client_secrets.json`, or supplied via `YOUTUBE_UPLOADER_CLIENT_SECRETS`. A legacy project-root `client_secrets.json` is also accepted.
+- Previously stored tokens and state in the working directory are **not migrated automatically**. Copy trusted files to the corresponding XDG locations if migrating an existing Linux installation.
+
+Token writes are atomic and owner-only (0600) on POSIX, but the existing pickle-based token file still assumes trusted local filesystem integrity. No automatic conversion to a new credential format is attempted. The `main.pyw` entry point remains available for Windows.

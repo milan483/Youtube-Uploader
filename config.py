@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 # App
@@ -7,13 +8,35 @@ APP_VERSION = "2.0.1"
 APP_AUTHOR = "GRard"
 
 # Paths
-CLIENT_SECRETS_FILE = 'client_secrets.json'
-TOKEN_FILE = 'token.pickle'
-UPLOAD_HISTORY_FILE = 'upload_history.json'
-UPLOAD_STATE_FILE = 'upload_state.json'
-QUOTA_STATE_FILE = 'quota_state.json'
-PLAYLIST_SORT_STATE_FILE = 'playlist_sort_state.json'
-USER_PREFERENCES_FILE = 'user_preferences.json'
+PROJECT_DIR = Path(__file__).resolve().parent
+IS_LINUX = sys.platform.startswith('linux')
+if IS_LINUX:
+    CONFIG_DIR = Path(os.environ.get('XDG_CONFIG_HOME') or (Path.home() / '.config')) / 'youtube-uploader'
+    DATA_DIR = Path(os.environ.get('XDG_DATA_HOME') or (Path.home() / '.local/share')) / 'youtube-uploader'
+    STATE_DIR = Path(os.environ.get('XDG_STATE_HOME') or (Path.home() / '.local/state')) / 'youtube-uploader'
+    # Keep compatibility with a credentials file already placed in the project,
+    # while preferring the XDG config directory for new Linux installations.
+    _project_credentials = PROJECT_DIR / 'client_secrets.json'
+    _config_credentials = CONFIG_DIR / 'client_secrets.json'
+    CLIENT_SECRETS_FILE = os.environ.get(
+        'YOUTUBE_UPLOADER_CLIENT_SECRETS',
+        str(_config_credentials if _config_credentials.exists() or not _project_credentials.exists()
+            else _project_credentials)
+    )
+    TOKEN_FILE = str(CONFIG_DIR / 'token.pickle')
+    UPLOAD_HISTORY_FILE = str(STATE_DIR / 'upload_history.json')
+    UPLOAD_STATE_FILE = str(STATE_DIR / 'upload_state.json')
+    QUOTA_STATE_FILE = str(STATE_DIR / 'quota_state.json')
+    PLAYLIST_SORT_STATE_FILE = str(STATE_DIR / 'playlist_sort_state.json')
+    USER_PREFERENCES_FILE = str(CONFIG_DIR / 'user_preferences.json')
+else:
+    CLIENT_SECRETS_FILE = 'client_secrets.json'
+    TOKEN_FILE = 'token.pickle'
+    UPLOAD_HISTORY_FILE = 'upload_history.json'
+    UPLOAD_STATE_FILE = 'upload_state.json'
+    QUOTA_STATE_FILE = 'quota_state.json'
+    PLAYLIST_SORT_STATE_FILE = 'playlist_sort_state.json'
+    USER_PREFERENCES_FILE = 'user_preferences.json'
 
 # YouTube API
 YOUTUBE_API_SCOPES = [
@@ -75,7 +98,7 @@ DEFAULT_NOTIFY_QUOTA_EXCEEDED = True
 DEFAULT_NOTIFY_BATCH_COMPLETE = False
 
 # UI
-ICON_PATH = os.path.join('assets', 'icon.png')
+ICON_PATH = str(PROJECT_DIR / 'assets' / 'icon.png')
 FALLBACK_TRAY_ICON_COLOR = 'red'
 GUI_WINDOW_WIDTH = 800
 GUI_WINDOW_HEIGHT = 600

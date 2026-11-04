@@ -233,6 +233,7 @@ class StateManager(LoggerMixin):
             'notify_when_empty': config.DEFAULT_NOTIFY_WHEN_EMPTY,
             'auto_close_when_empty': config.DEFAULT_AUTO_CLOSE_WHEN_EMPTY,
             'start_with_windows': False,
+            'start_on_login': False,
             'notify_upload_success': config.DEFAULT_NOTIFY_UPLOAD_SUCCESS,
             'notify_upload_failed': config.DEFAULT_NOTIFY_UPLOAD_FAILED,
             'notify_quota_exceeded': config.DEFAULT_NOTIFY_QUOTA_EXCEEDED,

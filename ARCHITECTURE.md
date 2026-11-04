@@ -220,3 +220,14 @@ Notes:
 5. Retry scheduling fields persist and are honored.
 6. Preferences persist across restart (including automation and notification flags).
 7. Playlist sorting works and resume state is cleared/saved correctly.
+
+
+## Linux desktop integration (P1D)
+
+- On Linux, `config.py` resolves XDG configuration/state directories and assets relative to the project, rather than relying on the current working directory.
+- `JsonStore.atomic_write_json` creates missing parent directories before saving.
+- `TokenStore.save_credentials` uses an atomic temporary file and owner-only POSIX permissions (0600). The token file remains a trusted-local-file pickle.
+- `NotificationManager` uses native `notify-send` when available; the Windows toast backend is imported only on Windows.
+- Under Wayland, `SystemTrayManager` attempts an Ayatana AppIndicator using GTK/GObject Introspection. It does not claim the icon is visible until a backend successfully initializes. If no usable tray backend exists, `WindowManager.minimize_to_tray` iconifies the window rather than withdrawing it.
+- `LinuxIntegration` creates and removes an XDG autostart desktop file; `gui.py` selects the appropriate platform integration and persists `start_on_login` separately from the legacy Windows preference.
+- `main.py` runs the existing `main.pyw` entry point for Linux. Windows startup remains unchanged.
