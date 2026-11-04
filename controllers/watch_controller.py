@@ -142,10 +142,13 @@ class WatchController(LoggerMixin):
                 flags['empty'] = True
                 self._log("No new videos found in watch folder")
                 with self._folder_state_lock:
-                    if (folder_generation == self._folder_generation
-                            and self._empty_notification_armed):
+                    notify_empty = (folder_generation == self._folder_generation
+                                    and self._empty_notification_armed)
+                    if notify_empty:
                         self._empty_notification_armed = False
-                        self._emit('notify_empty')
+                # GUI callbacks may wait for the UI thread, which can change folders.
+                if notify_empty:
+                    self._emit('notify_empty')
 
             def on_batch_found(total_files):
                 with self._folder_state_lock:

@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, timedelta
+import threading
 
 from controllers.watch_controller import WatchController
 
@@ -202,6 +203,43 @@ def test_stale_callbacks_after_folder_change_and_return_to_same_path_are_ignored
     stale_callbacks["on_no_files"]()
 
     assert events["notify_empty"] == []
+
+
+def test_notify_empty_callback_can_change_folder_without_lock_inversion():
+    events = defaultdict(list)
+    folder_change_completed = threading.Event()
+    callback_observations = []
+    folder_change_threads = []
+
+    def notify_empty():
+        events["notify_empty"].append(True)
+        worker = threading.Thread(
+            target=lambda: (setattr(controller, "watch_folder", "/other"), folder_change_completed.set()),
+            daemon=True,
+        )
+        folder_change_threads.append(worker)
+        worker.start()
+        callback_observations.append(folder_change_completed.wait(timeout=1))
+
+    callbacks = make_callbacks(events)
+    callbacks["notify_empty"] = notify_empty
+    controller = WatchController(
+        upload_manager=FakeUploadManager(),
+        auth_manager=FakeAuthManager(),
+        batch_uploader=OutcomeBatchUploader([1, 0, 0]),
+        callbacks=callbacks,
+    )
+    controller.watch_folder = "/watch"
+
+    controller._perform_folder_check()
+    controller._perform_folder_check()
+    for worker in folder_change_threads:
+        worker.join(timeout=1)
+    controller._perform_folder_check()
+
+    assert callback_observations == [True], "notify_empty ran while folder state remained locked"
+    assert all(not worker.is_alive() for worker in folder_change_threads), "folder-change worker did not terminate"
+    assert events["notify_empty"] == [True], "new folder inherited the prior folder's notification state"
 
 
 def test_periodic_and_manual_checks_share_empty_notification_state(monkeypatch):
