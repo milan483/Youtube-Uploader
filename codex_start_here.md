@@ -19,7 +19,7 @@ Avoid repeating discovery already recorded in the active task. Inspect additiona
 ## Active task: P1A — recursive scanning and centralized archive
 
 - **Task:** [.ai/tasks/p1a-recursive-scan-and-archive.md](.ai/tasks/p1a-recursive-scan-and-archive.md)
-- **Status:** Ready for implementation; documentation handoff only so far.
+- **Status:** Implemented and locally validated; awaiting independent review on draft PR #2.
 - **Working branch:** feat/p1-recursive-archive
 - **Base branch:** main
 - **Draft PR:** https://github.com/milan483/Youtube-Uploader/pull/2
