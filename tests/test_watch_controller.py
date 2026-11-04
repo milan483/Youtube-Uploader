@@ -41,6 +41,23 @@ class ScriptedBatchUploader:
         return {}
 
 
+class OutcomeBatchUploader:
+    """Replay scan outcomes through the same callbacks as BatchUploader."""
+
+    def __init__(self, outcomes):
+        self.outcomes = iter(outcomes)
+        self.paths = []
+
+    def upload_folder(self, folder_path, callbacks=None, should_stop=None):
+        self.paths.append(folder_path)
+        outcome = next(self.outcomes)
+        if outcome:
+            callbacks["on_batch_found"](outcome)
+        else:
+            callbacks["on_no_files"]()
+        return {}
+
+
 def make_callbacks(events):
     return {
         "set_progress": lambda value: events["set_progress"].append(value),
@@ -106,6 +123,114 @@ def test_perform_folder_check_skips_if_check_already_in_progress(log_messages):
 
     assert batch_uploader.calls == 0
     assert any("already in progress" in message for message in log_messages)
+
+
+def make_watch_controller(outcomes, events=None):
+    events = events if events is not None else defaultdict(list)
+    controller = WatchController(
+        upload_manager=FakeUploadManager(),
+        auth_manager=FakeAuthManager(),
+        batch_uploader=OutcomeBatchUploader(outcomes),
+        callbacks=make_callbacks(events),
+    )
+    controller.watch_folder = "/watch"
+    return controller, events
+
+
+def test_empty_scans_at_startup_do_not_notify_until_content_seen():
+    controller, events = make_watch_controller([0, 0, 0])
+
+    controller._perform_folder_check()
+    controller._perform_folder_check()
+    controller._perform_folder_check()
+
+    assert events["notify_empty"] == []
+
+
+def test_empty_transition_notifies_once_and_content_rearms_notification():
+    controller, events = make_watch_controller([2, 0, 0, 1, 0])
+
+    expected_notification_counts = [0, 1, 1, 1, 2]
+    for expected_count in expected_notification_counts:
+        controller._perform_folder_check()
+        assert len(events["notify_empty"]) == expected_count
+
+    assert events["notify_empty"] == [True, True]
+
+
+def test_normalized_same_folder_keeps_state():
+    controller, events = make_watch_controller([1, 0])
+
+    controller._perform_folder_check()
+    controller.watch_folder = "/watch/./"
+    controller._perform_folder_check()
+    assert events["notify_empty"] == [True]
+
+def test_folder_change_does_not_inherit_armed_state():
+    controller, events = make_watch_controller([1, 0])
+
+    controller._perform_folder_check()
+    controller.watch_folder = "/other"
+    controller._perform_folder_check()
+
+    assert events["notify_empty"] == []
+
+
+def test_stale_callbacks_after_folder_change_and_return_to_same_path_are_ignored():
+    events = defaultdict(list)
+
+    class DeferredBatchUploader:
+        callbacks = None
+
+        def upload_folder(self, folder_path, callbacks=None, should_stop=None):
+            self.callbacks = callbacks
+
+    batch_uploader = DeferredBatchUploader()
+    controller = WatchController(
+        upload_manager=FakeUploadManager(),
+        auth_manager=FakeAuthManager(),
+        batch_uploader=batch_uploader,
+        callbacks=make_callbacks(events),
+    )
+    controller.watch_folder = "/watch"
+
+    controller._perform_folder_check()
+    stale_callbacks = batch_uploader.callbacks
+    controller.watch_folder = "/other"
+    controller.watch_folder = "/watch"
+    stale_callbacks["on_batch_found"](1)
+    stale_callbacks["on_no_files"]()
+
+    assert events["notify_empty"] == []
+
+
+def test_periodic_and_manual_checks_share_empty_notification_state(monkeypatch):
+    controller, events = make_watch_controller([1, 0, 0, 0])
+    controller.should_stop = False
+    sleep_calls = {"count": 0}
+
+    class ImmediateThread:
+        def __init__(self, target, kwargs=None, daemon=None):
+            self.target = target
+            self.kwargs = kwargs or {}
+
+        def start(self):
+            self.target(**self.kwargs)
+
+    monkeypatch.setattr("controllers.watch_controller.threading.Thread", ImmediateThread)
+
+    def stop_after_one_poll(seconds):
+        sleep_calls["count"] += 1
+        if sleep_calls["count"] == 1:
+            controller.should_stop = True
+
+    controller._sleep_interruptible = stop_after_one_poll
+    controller._watch_folder_worker()
+    controller.should_stop = False
+    controller.force_check()
+    controller.force_check()
+
+    assert events["notify_empty"] == [True]
 
 
 def test_watch_folder_worker_honors_cooldown_and_does_not_run_batch():
