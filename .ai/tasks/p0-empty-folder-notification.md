@@ -1,6 +1,6 @@
 # P0: Prevent repeated empty watch-folder notifications
 
-- **Status:** Ready for implementation
+- **Status:** Implemented; awaiting independent review
 - **Priority:** P0
 - **Target branch:** main
 - **Working branch:** fix/p0-empty-folder-notification
@@ -78,12 +78,11 @@ Report the exact results. If the full suite cannot run, state why and distinguis
 
 ## Completion record
 
-Update this section when implementation is complete:
-
-- **Implementation status:**
-- **Changed files:**
-- **Focused test result:**
-- **Full test result:**
-- **Commit:**
-- **Pull request:**
-- **Known limitations:**
+- **Implementation status:** Complete within P0 scope. Controller-owned state suppresses startup empties, arms on supported content, emits once on a later empty scan, and resets on normalized folder changes. A folder-selection generation prevents stale scan callbacks from affecting a new selection. The existing non-blocking check lock and notification preference are preserved. The toast now says “No supported videos found in watch folder.”
+- **Changed files:** controllers/watch_controller.py, gui.py, tests/test_watch_controller.py, and this completion record.
+- **Focused test result:** Passed, exit 0: `/tmp/youtube-uploader-p0-venv/bin/python -m pytest tests/test_watch_controller.py -q` (9 passed in 0.02s).
+- **Full test result:** Passed, exit 0: `/tmp/youtube-uploader-p0-venv/bin/python -m pytest -q` (35 passed in 0.04s). `git diff --check` also passed, exit 0.
+- **Environment:** Initial system-Python commands (`python -m pytest tests/test_watch_controller.py -q` and `python -m pytest -q`) failed, exit 1, because pytest was absent. Validation then used an external temporary virtual environment with pytest and requests installed; no project dependencies were changed. Existing test stubs replace unavailable Google API modules.
+- **Commit:** Implementation: `5b776518e01ee67c81ee4656376de26e6f73278a`. The PR implementation report records the final documentation-inclusive head.
+- **Pull request:** https://github.com/milan483/Youtube-Uploader/pull/1 (existing draft).
+- **Known limitations:** No Windows GUI/toast smoke test or live YouTube upload was performed. Tests use deterministic fakes without network access. No CI checks were reported before push; final CI status is recorded in the PR report. Independent review remains pending.
