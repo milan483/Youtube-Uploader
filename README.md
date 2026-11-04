@@ -695,7 +695,7 @@ Token writes are atomic and owner-only (0600) on POSIX, but the existing pickle-
 
 ## Uploaded Clips Manager (P1B)
 
-Select a watch folder and click **Uploaded Clips...** to browse the central `Uploaded/` archive recursively. The dialog lists root-relative filenames, sizes and total storage, with Refresh, Select All, Delete Selected and Delete All. All deletions require confirmation and send **local archived copies** to the OS Trash/Recycle Bin using `send2trash`. They never delete YouTube videos or clear upload-history records.
+Select a watch folder and click **Uploaded Clips...** to browse the central `Uploaded/` archive recursively. The dialog lists root-relative filenames, sizes and total storage, with Refresh, Open Folder, Select All, Delete Selected and Delete All. Deletion confirmations show the count and selected file sizes. All deletions require confirmation and send **local archived copies** to the OS Trash/Recycle Bin using `send2trash`. They never delete YouTube videos or clear upload-history records.
 
 The manager rejects symlinks, junctions, hidden/incomplete staging files and paths outside the selected archive. Deletion fails closed if Trash is unavailable; it never falls back to permanent removal. Same-process archiving and cleanup use a shared lock. Legacy per-subfolder Uploaded directories are not migrated or managed.
 

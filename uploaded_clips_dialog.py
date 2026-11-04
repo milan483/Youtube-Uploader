@@ -1,5 +1,7 @@
 """Tkinter dialog for inspecting and recycling archived local clips."""
 import os
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -14,6 +16,7 @@ class UploadedClipsDialog:
         self.dialogs = dialog_manager
         self.logger = logger
         self.busy = False
+        self._clip_sizes = {}
 
         self.window = tk.Toplevel(parent)
         self.window.title("Uploaded Clips — Local Archive")
@@ -52,6 +55,9 @@ class UploadedClipsDialog:
         buttons.pack(fill=tk.X, padx=10, pady=(2, 10))
         self.refresh_button = ttk.Button(buttons, text="Refresh", command=self.refresh)
         self.refresh_button.pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(buttons, text="Open Folder", command=self.open_folder).pack(
+            side=tk.LEFT, padx=4
+        )
         self.select_button = ttk.Button(buttons, text="Select All", command=self.select_all)
         self.select_button.pack(side=tk.LEFT, padx=4)
         self.selected_button = ttk.Button(
@@ -99,6 +105,7 @@ class UploadedClipsDialog:
         for item in self.tree.get_children():
             self.tree.delete(item)
         total = 0
+        self._clip_sizes = {clip.relative_path: clip.size_bytes for clip in clips}
         for clip in clips:
             total += clip.size_bytes
             self.tree.insert(
@@ -110,6 +117,20 @@ class UploadedClipsDialog:
         else:
             self.summary.set(f"{len(clips)} archived clip(s) — {format_file_size(total)}")
         self._set_busy(False)
+
+    def open_folder(self):
+        try:
+            archive = self.manager._archive_root(self.watch_root)
+            if not os.path.isdir(archive):
+                self.dialogs.show_info("Archive empty", "No Uploaded archive exists yet.")
+                return
+            if sys.platform == "win32":
+                os.startfile(archive)
+            else:
+                command = ["open", archive] if sys.platform == "darwin" else ["xdg-open", archive]
+                subprocess.Popen(command, start_new_session=True)
+        except Exception as error:
+            self.dialogs.show_error("Could not open archive", str(error))
 
     def select_all(self):
         self.tree.selection_set(self.tree.get_children())
@@ -126,10 +147,11 @@ class UploadedClipsDialog:
         # The dialog retains its original watch-root snapshot even if the
         # main window's selected folder changes in the meantime.
         count = len(names)
+        size = sum(self._clip_sizes.get(name, 0) for name in names)
         archive_path = get_uploaded_folder_path(self.watch_root)
         if not self.dialogs.ask_yes_no(
             "Move local clips to Recycle Bin/Trash?",
-            f"Move {count} local clip(s) from:\n{archive_path}\n\n"
+            f"Move {count} local clip(s) ({format_file_size(size)}) from:\n{archive_path}\n\n"
             "This does not delete anything from YouTube. Continue?"
         ):
             return
