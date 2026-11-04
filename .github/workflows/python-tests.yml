@@ -23,5 +23,7 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install test dependencies
         run: python -m pip install pytest requests send2trash
+      - name: Compile Python sources
+        run: python -m compileall -q .
       - name: Run unit tests
         run: python -m pytest -q
