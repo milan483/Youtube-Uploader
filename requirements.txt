@@ -24,6 +24,9 @@ pystray==0.19.5
 # HTTP Requests (for connectivity checks)
 requests==2.31.0
 
+# Cross-platform Trash / Recycle Bin integration for local archive cleanup
+send2trash==1.8.3
+
 # Windows-specific (for file permissions, shutdown handling, notifications, startup integration)
 # These are Windows-only packages that may fail on other platforms
 # If you're on Linux/Mac, you can comment these out (but some features won't work)

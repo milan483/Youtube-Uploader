@@ -668,3 +668,12 @@ For issues:
 5. Open an issue on GitHub
 
 **Remember**: All your upload history and state files are in JSON format and human-readable. You can inspect or manually edit them if needed!
+
+
+## Uploaded Clips Manager (P1B)
+
+Use **Uploaded Clips...** in the main window after selecting a watch folder. The dialog scans that folder's central `Uploaded/` archive, shows the relative file paths and sizes, and supports individual, selected, or bulk cleanup. All deletion actions require confirmation and send **only local archived video files** to the operating system's Trash/Recycle Bin via `send2trash`. No YouTube video is deleted and no upload history is cleared.
+
+The manager deliberately ignores hidden or incomplete staging artifacts, unsupported/non-video files, symlinks and junctions. It doesn't browse old, per-subfolder legacy `Uploaded/` directories, and it never migrates those archives automatically. If Trash support is missing, deletion fails with an error rather than permanently removing files.
+
+The dialog uses a fixed snapshot of the selected watch root, shown at the top, to prevent a later main-window folder change from accidentally redirecting a deletion. Archive moves and deletion are serialized inside the same application process; filesystem changes by other processes are not fully protected against races.

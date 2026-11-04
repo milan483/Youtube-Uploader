@@ -1,6 +1,7 @@
 import hashlib
 import os
 import shutil
+import threading
 import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
@@ -16,6 +17,8 @@ class FileOperationError(Exception):
 class FileHandler(LoggerMixin):
     def __init__(self, logger=None):
         self.logger = logger
+        # Shared by archiving and local Trash operations in this process.
+        self.archive_lock = threading.RLock()
 
     def set_logger(self, logger):
         self.logger = logger
@@ -229,6 +232,11 @@ class FileHandler(LoggerMixin):
         return True
 
     def safe_move(self, source_path, destination_path, cached_source_hash=None):
+        # Do not expose partly-published archives to the manager while moving.
+        with self.archive_lock:
+            return self._safe_move_unlocked(source_path, destination_path, cached_source_hash)
+
+    def _safe_move_unlocked(self, source_path, destination_path, cached_source_hash=None):
         import time
         try:
             if not os.path.isfile(source_path) or self._is_link_or_junction(source_path):

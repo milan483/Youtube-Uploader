@@ -14,6 +14,8 @@ from system_tray_manager import SystemTrayManager
 from windows_integration import WindowsIntegration
 from gui_components import TooltipHelper
 from controllers.watch_controller import WatchController
+from services.uploaded_clips_manager import UploadedClipsManager
+from uploaded_clips_dialog import UploadedClipsDialog
 
 
 class YouTubeUploaderGUI:
@@ -37,6 +39,7 @@ class YouTubeUploaderGUI:
 
         self.notification_manager = NotificationManager(log_callback=self.log)
         self.dialog_manager = DialogManager()
+        self.uploaded_clips_manager = UploadedClipsManager(self.file_handler)
         self.windows_integration = WindowsIntegration(log_callback=self.log)
 
         self.system_tray_manager = SystemTrayManager(
@@ -457,6 +460,16 @@ class YouTubeUploaderGUI:
             "Useful for one-off uploads"
         )
 
+        self.manage_uploaded_button = ttk.Button(
+            button_frame, text="Uploaded Clips...",
+            command=self._on_manage_uploaded_clips
+        )
+        self.manage_uploaded_button.pack(side=tk.LEFT, padx=2)
+        create_tooltip(
+            self.manage_uploaded_button,
+            "Browse and recycle local archived copies, without deleting YouTube videos"
+        )
+
         # Add some spacing before Exit button
         ttk.Frame(button_frame, width=20).pack(side=tk.LEFT)
 
@@ -872,6 +885,22 @@ class YouTubeUploaderGUI:
         thread = threading.Thread(target=sort_thread, daemon=True)
         thread.start()
     
+    def _on_manage_uploaded_clips(self):
+        folder = self.folder_path_var.get().strip()
+        if not folder or not os.path.isdir(folder):
+            self.dialog_manager.show_warning(
+                "Choose a watch folder",
+                "Select an existing watch folder before managing its Uploaded archive."
+            )
+            return
+        UploadedClipsDialog(
+            self.root,
+            self.uploaded_clips_manager,
+            folder,
+            self.dialog_manager,
+            logger=self.log,
+        )
+
     def _on_browse_folder(self):
         folder = self.dialog_manager.ask_directory(title="Select Watch Folder")
         if folder:

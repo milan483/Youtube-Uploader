@@ -1,42 +1,19 @@
 # Codex Start Here
 
-This is the entry point for implementation work in this repository.
-
 ## Workflow
+ChatGPT coordinates repository analysis, plans and PR review; Codex Desktop implements and validates bounded tasks; GitHub records the work. Preserve local changes, don't duplicate branches/PRs and don't merge without user approval.
 
-- ChatGPT owns repository inspection, architectural research, task specifications, and independent PR review.
-- Codex Desktop owns bounded implementation and local tests.
-- GitHub is the durable record for plans, commits, verification, PR reports, and review feedback.
+Read [AGENTS.md](AGENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), and the active task.
 
-Avoid repeating discovery already recorded in the active task. Inspect additional code or conduct outside research only when it is required to implement or verify a specific unresolved detail.
+## Current status
 
-## Read first
+- P0 merged: [PR #1](https://github.com/milan483/Youtube-Uploader/pull/1).
+- P1A merged: [PR #2](https://github.com/milan483/Youtube-Uploader/pull/2).
+- **P1B** Uploaded Clips Manager has been implemented in branch `feat/p1b-uploaded-clips-manager` as a ChatGPT-authored change, pending test/CI results and independent review.
+- P1C upload reliability and P1D Linux support are separate workstreams tracked in [.ai/plans/implementation-roadmap.md](.ai/plans/implementation-roadmap.md).
 
-1. [AGENTS.md](AGENTS.md) for repository-wide constraints.
-2. [ARCHITECTURE.md](ARCHITECTURE.md) for module boundaries and callback contracts.
-3. The active task specification below.
+## P1B continuation if requested
 
-## Active task: P1A — recursive scanning and centralized archive
+Read [.ai/tasks/p1b-uploaded-clips-manager.md](.ai/tasks/p1b-uploaded-clips-manager.md). Use the existing P1B branch and PR, do not duplicate either. Run `python -m pytest tests/test_uploaded_clips_manager.py tests/test_file_handler.py -q` followed by `python -m pytest -q` on Windows and Linux. Review CI results; smoke-test the dialog with a disposable archive. Post concrete test results and any defects to the PR. Avoid P1C/P1D changes unless separately assigned.
 
-- **Task:** [.ai/tasks/p1a-recursive-scan-and-archive.md](.ai/tasks/p1a-recursive-scan-and-archive.md)
-- **Status:** Implemented and locally validated; awaiting independent review on draft PR #2.
-- **Working branch:** feat/p1-recursive-archive
-- **Base branch:** main
-- **Draft PR:** https://github.com/milan483/Youtube-Uploader/pull/2
-- **Scope:** Optional recursive watch-folder scanning and safe preservation of source subdirectory structure beneath a central Uploaded archive. Nothing else.
-
-P0 notification deduplication was merged in PR #1 and should be preserved. The follow-on P1B task, [.ai/tasks/p1b-uploaded-clips-manager.md](.ai/tasks/p1b-uploaded-clips-manager.md), is **queued**, not yet authorized for implementation. Likewise, upload-reliability and Linux integration work remain in the roadmap.
-
-## Codex checklist
-
-1. Confirm the remote branch and existing draft PR; check the local working tree and preserve existing changes. Do not create a duplicate PR.
-2. Read the active P1A task and inspect the named call sites. Make only the necessary scoped edits.
-3. Implement and extend deterministic file-discovery, archive-path, preferences, batch/orchestrator, and upload regression tests. Do not require live YouTube API access.
-4. Run focused tests, followed by the full suite:
-   - python -m pytest tests/test_file_handler.py tests/test_batch_uploader.py tests/test_upload_manager.py tests/test_watch_controller.py -q
-   - python -m pytest -q
-5. Record implementation results, actual commands, counts, changed files, and limitations in the task file and existing draft PR.
-6. Commit and push to feat/p1-recursive-archive. Keep PR #2 in draft for independent review.
-7. Do not merge or publish anything without the user's explicit approval.
-
-Use task-specific brief handoffs instead of generating large prompts. New workstreams require new task specs and an updated pointer in this file. Do not implement queued phases simply because they are listed in a roadmap.
+After P1B review, update this entry point to the next active task. Never assume a roadmap entry is authorization to implement it.
