@@ -32,11 +32,12 @@ def test_token_file_written_atomically_with_owner_only_permissions(tmp_path):
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
 
 
-def test_linux_startup_entry_created_and_removed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("frozen", [False, True])
+def test_linux_startup_entry_created_and_removed(tmp_path, monkeypatch, frozen):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr(
         linux_integration, "sys",
-        SimpleNamespace(platform="linux", executable=sys.executable)
+        SimpleNamespace(platform="linux", executable=sys.executable, frozen=frozen)
     )
     manager = linux_integration.LinuxIntegration()
     manager.add_to_startup()
@@ -45,7 +46,11 @@ def test_linux_startup_entry_created_and_removed(tmp_path, monkeypatch):
     assert target.is_file()
     content = target.read_text(encoding="utf-8")
     assert "Type=Application" in content
-    assert "Exec=" in content and "main.py" in content
+    command = next(line for line in content.splitlines() if line.startswith("Exec="))
+    expected = f"Exec={linux_integration._desktop_exec_quote(sys.executable)}"
+    if not frozen:
+        expected += " " + linux_integration._desktop_exec_quote(linux_integration.config.PROJECT_DIR / "main.py")
+    assert command == expected
     assert manager.is_startup_available()
 
     manager.remove_from_startup()

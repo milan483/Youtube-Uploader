@@ -704,3 +704,21 @@ The manager rejects symlinks, junctions, hidden/incomplete staging files and pat
 Uploads use the Google client's resumable `next_chunk()` interface, including one-chunk uploads. Transient failures such as SSL EOF are retried using the **same request/session** where possible, rather than restarting a new `videos.insert`. Exhausted retries are scheduled with persistent counters; successful uploads clear that retry metadata. Certificate verification failures are not classified as transient.
 
 The upload session URI is not persisted across process restarts. Same-manager uploads are serialized, but independent application processes are not locked against duplicate uploads. Test unattended transfers with a disposable YouTube account.
+
+## Release packages
+
+Publishing a GitHub release builds the tagged source and attaches x86-64
+packages for Windows (`.zip`) and Linux (`.tar.gz`). Extract the whole archive
+and run `youtube-uploader.exe` on Windows or `./youtube-uploader` on Linux.
+Keep the bundled `_internal` directory next to the executable.
+
+Supply your own OAuth desktop client JSON. Place `client_secrets.json` next to
+the Windows executable or in the Linux XDG config directory described above.
+The Linux bundle targets Ubuntu 22.04 or compatible systems with an X11 or
+XWayland desktop. It uses the taskbar fallback on Wayland because the bundle
+does not ship native AppIndicator bindings. Install `notify-send` separately
+if you want desktop notifications.
+
+The **Build release packages** workflow also makes downloadable build artifacts
+on pull requests and manual runs. Release assets are attached only when a
+release is published. Tag a commit containing the workflow.
