@@ -668,3 +668,39 @@ For issues:
 5. Open an issue on GitHub
 
 **Remember**: All your upload history and state files are in JSON format and human-readable. You can inspect or manually edit them if needed!
+
+
+## Linux / KDE Plasma Wayland (P1D)
+
+Core uploads and the Tkinter window can run on Linux. Windows-only Python dependencies are installed only on Windows. On Arch/CachyOS install the GTK AppIndicator integration and notification utility:
+
+```bash
+sudo pacman -S --needed python python-pip tk python-gobject libayatana-appindicator libnotify
+python -m venv --system-site-packages .venv
+source .venv/bin/activate.fish
+python -m pip install -r requirements.txt
+python main.py
+```
+
+The `--system-site-packages` option lets the virtual environment import the distro's `gi` bindings. The Linux Wayland tray uses AyatanaAppIndicator when available; otherwise minimizing falls back to the taskbar rather than hiding the only way to reopen the window. Notifications use `notify-send`. A **Start on login** checkbox manages an XDG autostart file in `~/.config/autostart`. Tray availability depends on the desktop's actual indicator support, which cannot be established by headless unit tests.
+
+Linux application data follows XDG directories:
+- Preferences and OAuth token: `$XDG_CONFIG_HOME/youtube-uploader` (default `~/.config/youtube-uploader`).
+- History, retry and quota metadata: `$XDG_STATE_HOME/youtube-uploader` (default `~/.local/state/youtube-uploader`).
+- The OAuth client JSON may be placed at `~/.config/youtube-uploader/client_secrets.json`, or supplied via `YOUTUBE_UPLOADER_CLIENT_SECRETS`. A legacy project-root `client_secrets.json` is also accepted.
+- Previously stored tokens and state in the working directory are **not migrated automatically**. Copy trusted files to the corresponding XDG locations if migrating an existing Linux installation.
+
+Token writes are atomic and owner-only (0600) on POSIX, but the existing pickle-based token file still assumes trusted local filesystem integrity. No automatic conversion to a new credential format is attempted. The `main.pyw` entry point remains available for Windows.
+
+
+## Uploaded Clips Manager (P1B)
+
+Select a watch folder and click **Uploaded Clips...** to browse the central `Uploaded/` archive recursively. The dialog lists root-relative filenames, sizes and total storage, with Refresh, Open Folder, Select All, Delete Selected and Delete All. Deletion confirmations show the count and selected file sizes. All deletions require confirmation and send **local archived copies** to the OS Trash/Recycle Bin using `send2trash`. They never delete YouTube videos or clear upload-history records.
+
+The manager rejects symlinks, junctions, hidden/incomplete staging files and paths outside the selected archive. Deletion fails closed if Trash is unavailable; it never falls back to permanent removal. Same-process archiving and cleanup use a shared lock. Legacy per-subfolder Uploaded directories are not migrated or managed.
+
+## Upload network recovery (P1C)
+
+Uploads use the Google client's resumable `next_chunk()` interface, including one-chunk uploads. Transient failures such as SSL EOF are retried using the **same request/session** where possible, rather than restarting a new `videos.insert`. Exhausted retries are scheduled with persistent counters; successful uploads clear that retry metadata. Certificate verification failures are not classified as transient.
+
+The upload session URI is not persisted across process restarts. Same-manager uploads are serialized, but independent application processes are not locked against duplicate uploads. Test unattended transfers with a disposable YouTube account.

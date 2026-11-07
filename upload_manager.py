@@ -1,4 +1,6 @@
 import os
+import ssl
+import threading
 import time
 from datetime import datetime, timedelta
 from googleapiclient.http import MediaFileUpload
@@ -40,12 +42,18 @@ class UploadManager(LoggerMixin):
         self.session_upload_count = 0
         self.client_created_time = datetime.now()
         self.uploads_since_refresh = 0
+        # Serialize uploads, including manual and watch-mode calls for the same
+        # manager instance, to avoid concurrent duplicate requests.
+        self._upload_lock = threading.RLock()
 
     def set_logger(self, logger):
         self.logger = logger
         self.playlist_service.set_logger(self._log)
 
     def _is_transient_network_error(self, error):
+        if isinstance(error, (ssl.SSLEOFError, ConnectionResetError,
+                              ConnectionAbortedError, BrokenPipeError, TimeoutError)):
+            return True
         error_str = str(error).lower()
         error_repr = repr(error).lower()
         transient_indicators = [
@@ -60,6 +68,9 @@ class UploadManager(LoggerMixin):
             'timeout',
             'temporarily unavailable',
             'network unreachable',
+            'ssleoferror',
+            'eof occurred in violation of protocol',
+            'remote end closed connection',
         ]
         for indicator in transient_indicators:
             if indicator in error_str or indicator in error_repr:
@@ -167,6 +178,11 @@ class UploadManager(LoggerMixin):
             return False
 
     def upload_video(self, filepath, progress_callback=None, watch_root=None):
+        """Serialize uploads so watch/manual callers cannot race on the same file."""
+        with self._upload_lock:
+            return self._upload_video_locked(filepath, progress_callback, watch_root)
+
+    def _upload_video_locked(self, filepath, progress_callback=None, watch_root=None):
         """Uploads a video file to YouTube. Returns (success, message, video_id)."""
         filename = os.path.basename(filepath)
 
@@ -239,112 +255,91 @@ class UploadManager(LoggerMixin):
         except Exception:
             pass
 
-        while True:
-            media = None
-            try:
-                media = MediaFileUpload(
-                    filepath,
-                    chunksize=chunk_size,
-                    resumable=True
-                )
-
-                self._log(f"Uploading {filename} to YouTube...")
-
+        media = None
+        try:
+            media = MediaFileUpload(
+                filepath, chunksize=chunk_size, resumable=True
+            )
+            self._log(f"Uploading {filename} to YouTube...")
+            # Reuse one resumable request/session for transient errors. Recreating
+            # videos.insert() for each failed chunk risks restarting the transfer
+            # (and uploading duplicate content after an ambiguous EOF response).
+            request = self.youtube.videos().insert(
+                part=','.join(body.keys()), body=body, media_body=media
+            )
+            response = None
+            while response is None:
                 try:
-                    request = self.youtube.videos().insert(
-                        part=','.join(body.keys()),
-                        body=body,
-                        media_body=media
-                    )
-
-                    if chunk_size == -1:
-                        response = request.execute()
-                        video_id = response['id']
-                    else:
-                        response = None
-                        while response is None:
-                            status, response = request.next_chunk()
-                            if status:
-                                progress = int(status.progress() * 100)
-                                self._log(f"Upload progress: {progress}%")
-                                if progress_callback:
-                                    progress_callback(progress)
-                        video_id = response['id']
-
-                except HttpError as e:
-                    error_content = str(e.content) if hasattr(e, 'content') else str(e)
-                    if 'quotaExceeded' in error_content or 'uploadLimitExceeded' in error_content:
-                        self.record_quota_exceeded()
-                        raise QuotaExceededError("YouTube upload quota exceeded")
+                    status, response = request.next_chunk()
+                except Exception as error:
+                    if isinstance(error, HttpError):
+                        content = str(getattr(error, 'content', error))
+                        if 'quotaExceeded' in content or 'uploadLimitExceeded' in content:
+                            self.record_quota_exceeded()
+                            raise QuotaExceededError("YouTube upload quota exceeded")
+                    if (self._is_transient_network_error(error)
+                            and transient_retry_count < config.MAX_UPLOAD_RETRY_ATTEMPTS):
+                        transient_retry_count += 1
+                        delay = config.TRANSIENT_NETWORK_ERROR_RETRY_DELAY_SECONDS
+                        self._log(f"Transient upload error: {error}; retrying existing session "
+                                  f"({transient_retry_count}/{config.MAX_UPLOAD_RETRY_ATTEMPTS}) "
+                                  f"after {delay}s")
+                        time.sleep(delay)
+                        continue
                     raise
+                if status:
+                    progress = int(status.progress() * 100)
+                    self._log(f"Upload progress: {progress}%")
+                    if progress_callback:
+                        progress_callback(progress)
+            video_id = response['id']
 
-                finally:
-                    if media and hasattr(media, '_fd') and media._fd:
-                        media._fd.close()
-                        time.sleep(config.INITIAL_FILE_OPERATION_DELAY)
+        except QuotaExceededError:
+            self.state_manager.set_upload_state(filepath, 'failed')
+            raise
+        except Exception as error:
+            retry_count = self.state_manager.get_retry_count(filepath) + 1
+            is_transient = self._is_transient_network_error(error)
+            if is_transient:
+                error_type = "transient network error (retries exhausted)"
+                delay = config.INITIAL_RETRY_DELAY_SECONDS
+            else:
+                error_type = "error"
+                delay = min(
+                    config.INITIAL_RETRY_DELAY_SECONDS * (2 ** (retry_count - 1)),
+                    config.MAX_RETRY_DELAY_SECONDS
+                )
+            delay_msg = f"{delay // 60} minute(s)"
 
-                break
-
-            except QuotaExceededError:
-                self.state_manager.set_upload_state(filepath, 'failed')
-                raise
-
-            except Exception as e:
-                if media and hasattr(media, '_fd') and media._fd:
-                    try:
-                        media._fd.close()
-                    except:
-                        pass
-
-                is_transient = self._is_transient_network_error(e)
-
-                if is_transient and transient_retry_count < config.MAX_UPLOAD_RETRY_ATTEMPTS:
-                    transient_retry_count += 1
-                    delay = config.TRANSIENT_NETWORK_ERROR_RETRY_DELAY_SECONDS
-                    self._log(f"Transient network error: {str(e)}")
-                    self._log(f"Waiting {delay} seconds before retry "
-                              f"(attempt {transient_retry_count + 1}/{config.MAX_UPLOAD_RETRY_ATTEMPTS + 1})...")
-                    time.sleep(delay)
-                    continue
-
-                retry_count = self.state_manager.get_retry_count(filepath)
-                retry_count += 1
-
-                if is_transient:
-                    error_type = "transient network error (retries exhausted)"
-                    delay = config.INITIAL_RETRY_DELAY_SECONDS
-                    delay_msg = f"{delay // 60} minute(s)"
-                else:
-                    error_type = "error"
-                    delay = min(
-                        config.INITIAL_RETRY_DELAY_SECONDS * (2 ** (retry_count - 1)),
-                        config.MAX_RETRY_DELAY_SECONDS
-                    )
-                    delay_msg = f"{delay // 60} minute(s)"
-
-                if retry_count < config.MAX_UPLOAD_RETRY_ATTEMPTS:
-                    next_retry = datetime.now() + timedelta(seconds=delay)
-                    self.state_manager.set_upload_state(
-                        filepath,
-                        'failed',
-                        retry_count=retry_count,
-                        next_retry_time=next_retry.isoformat()
-                    )
-                    error_msg = (f"Upload failed for {filename}: {str(e)} ({error_type}). "
-                               f"Will retry (attempt {retry_count + 1}/{config.MAX_UPLOAD_RETRY_ATTEMPTS}) "
-                               f"in {delay_msg}.")
-                    self._log(error_msg)
-                else:
-                    self.state_manager.set_upload_state(
-                        filepath,
-                        'failed',
-                        retry_count=retry_count
-                    )
-                    error_msg = (f"Upload failed for {filename} after {config.MAX_UPLOAD_RETRY_ATTEMPTS} attempts: {str(e)}. "
-                               f"Manual intervention required.")
-                    self._log(error_msg)
-
-                return False, error_msg, None
+            if retry_count < config.MAX_UPLOAD_RETRY_ATTEMPTS:
+                next_retry = datetime.now() + timedelta(seconds=delay)
+                self.state_manager.set_upload_state(
+                    filepath, 'failed', retry_count=retry_count,
+                    next_retry_time=next_retry.isoformat()
+                )
+                message = (
+                    f"Upload failed for {filename}: {error} ({error_type}). "
+                    f"Will retry (attempt {retry_count + 1}/{config.MAX_UPLOAD_RETRY_ATTEMPTS}) "
+                    f"in {delay_msg}."
+                )
+            else:
+                self.state_manager.set_upload_state(
+                    filepath, 'failed', retry_count=retry_count
+                )
+                message = (
+                    f"Upload failed for {filename} after "
+                    f"{config.MAX_UPLOAD_RETRY_ATTEMPTS} attempts: {error}. "
+                    "Manual intervention required."
+                )
+            self._log(message)
+            return False, message, None
+        finally:
+            if media and getattr(media, '_fd', None):
+                try:
+                    media._fd.close()
+                except Exception as close_error:
+                    self._log(f"Could not close upload media: {close_error}")
+                time.sleep(config.INITIAL_FILE_OPERATION_DELAY)
 
         playlist_warning = None
         if self.selected_playlist_id:

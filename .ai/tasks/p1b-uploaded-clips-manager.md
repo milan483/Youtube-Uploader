@@ -1,37 +1,49 @@
-# P1B — Uploaded Clips Manager and safe local deletion
+# P1B — Uploaded Clips Manager and safe local cleanup
 
-- **Status:** Queued; DO NOT implement as part of P1A
-- **Dependency:** P1A recursive scanning and centralized archive, after review
-- **Branch/PR:** Not yet assigned; create a dedicated task branch and draft PR after P1A
-- **Implementer:** Codex Desktop
-- **Reviewer:** ChatGPT through GitHub
+- **Status:** Implemented in GitHub; awaiting tests, CI and Windows smoke verification.
+- **Repository:** milan483/Youtube-Uploader
+- **Branch:** feat/p1b-uploaded-clips-manager
+- **Base:** main (PR #2 already merged)
+- **Scope:** Only manual cleanup of archived local files. Never delete YouTube videos.
 
-## Objective
+## Implementation
 
-Add a small Windows-compatible Tkinter interface for viewing and cleaning up the local files in the current watch root's `Uploaded` archive. Deleting a local clip **must not** delete the YouTube upload or erase upload-history metadata.
+- `services/uploaded_clips_manager.py`: filesystem-only browsing and Trash operations. Uses the selected watch root's central `Uploaded` folder, recursive relative paths, file sizes, per-file errors, strict path containment, rejection of junctions/symlinks and incomplete/hidden files.
+- `uploaded_clips_dialog.py`: Tkinter management dialog listing archived clips, disk usage, Refresh, Select All, Delete Selected, Delete All and Close. Sends operations to background threads and updates UI on the Tk main loop. Always confirms deletion, naming the fixed snapshot of the archive root.
+- `gui.py`: adds the Uploaded Clips button and launches the dialog for the current watch root.
+- `file_handler.py`: same-process `archive_lock` serializes archive moves with manager reads and deletes, preventing in-progress archive publication from being selected.
+- `requirements.txt`: adds the cross-platform `send2trash` dependency. When missing, the manager fails closed and does not fall back to permanent deletion.
+- `tests/test_uploaded_clips_manager.py`: deterministic enumeration, scoped deletion, partial failure, traversal/symlink and stale-selection tests.
+- `.github/workflows/python-tests.yml`: pytest workflow for Python 3.11/3.13 on Ubuntu and Windows.
 
-## Planned behavior
+## Acceptance criteria
 
-1. Add an **Uploaded Clips** control to the main GUI; it opens a management dialog for the **current watch root's** `Uploaded` directory.
-2. List files recursively within that archive, with root-relative names, sizes, and a total storage figure. Support Refresh, Select All, Select Individual, Delete Selected, and Delete All.
-3. Deletion is **manual only**, to the operating system's Trash/Recycle Bin using an appropriate cross-platform backend such as `send2trash`, not permanent `os.remove`. Ask for confirmation showing file count and total size for bulk deletion.
-4. Fail closed when system Trash is unavailable; never silently fall back to permanent deletion. Show partial successes and per-file failures, then refresh the list.
-5. Constrain all deletions to the canonical managed archive root. Reject symlinks and path traversal, revalidate after selection and immediately before deletion, and do not follow symlink directories.
-6. Never permit deletion of source files outside the managed archive, including files in the active watch directory or other paths that merely share a textual prefix.
-7. Avoid deleting files still being archived/copied or otherwise in use; coordinate with P1A's complete-file staging/finalization. Do not expose staging files as selectable clips.
-8. Do not modify `upload_history.json`, remote YouTube content, or upload-state records when archiving copies are deleted. The duplicate-detection history should continue preventing duplicate uploads of identical content.
-9. Keep the UI responsive during filesystem enumeration and Trash operations; marshal widget updates to Tk's main thread.
-10. Keep archived files from older, per-subfolder Uploaded directories **out of the new manager** initially; do not migrate or delete those automatically. Document the limitation.
+- Archived clips from nested game folders are listed with correct relative paths, sizes and total.
+- Only videos under the central archive are selectable; hidden staging, symlinks, junctions and non-video files are excluded.
+- Delete Selected and Delete All ask for confirmation and send only chosen clips to OS Trash; bulk operations report individual failures and refresh.
+- A missing Trash provider or permission error never silently leads to permanent deletion.
+- Deleting local copies never modifies upload history, retry state or any remote YouTube video.
+- Changing the main window's watch root cannot silently retarget an already-open dialog.
+- Concurrent in-process archiving is serialized by the file-handler lock.
+- Existing recursive scanning, P0 notifications and manual single-file upload behavior are unchanged.
 
-## Acceptance and tests
+## Validation
 
-- Correct recursive listing, sizes, total storage, empty-archive state, and path display for duplicate filenames in different subdirectories.
-- Delete one, selected multiple, or all, with correct confirmation and refreshed data.
-- Mock Trash operations to prove only selected files under the managed root are targeted.
-- Validate symlink, traversal, changing-root, missing-file, permission-denied, partly failed Trash, and in-progress archive protections.
-- Prove deletion leaves local upload history and remote YouTube videos untouched.
-- Verify the manager is usable under Windows; require a manual GUI smoke checklist in addition to deterministic unit tests.
+Run `python -m pytest tests/test_uploaded_clips_manager.py tests/test_file_handler.py -q` and `python -m pytest -q`. Inspect GitHub Actions for both Windows and Linux. This handoff was authored through GitHub with no local repository checkout; **do not claim tests have passed until evidence is available**.
 
-## Handoff after P1A
+### Manual Windows smoke check
 
-Before implementation, ChatGPT should update this specification with the final P1A archive API and path conventions, set an independent branch and PR, and point `codex_start_here.md` to this task. Do not implement P1B solely from this queued plan.
+1. In a disposable watch folder, create `Uploaded/Game A/clip.mp4`, `Uploaded/Game B/clip.mp4` and a fake hidden `.upload-staging-123.part` file.
+2. Open Uploaded Clips. Verify paths, sizes and count and ensure the hidden artifact isn't shown.
+3. Select only one clip and Delete Selected; cancel once, then confirm. Verify that only that clip is in Recycle Bin.
+4. Delete All and verify the other clip moves to Recycle Bin, not permanently removed, and YouTube/history are unchanged.
+5. Change the main window's watch folder with a dialog still open. Verify the dialog clearly displays and continues to use its original root.
+6. Test missing Trash dependency and locked file failures; ensure no permanent deletion and useful error messages.
+
+## Known limits
+
+Protection from malicious concurrent changes by *other processes* is best-effort, not transactional. Old nested Uploaded directories are not migrated or managed. Windows Explorer may limit Trash support for some network shares; failures are surfaced.
+
+## Completion record
+
+- **Verification pending**: command outputs, commit SHA, PR URL, and smoke results to be updated after review.

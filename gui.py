@@ -12,8 +12,11 @@ from dialog_manager import DialogManager
 from window_manager import WindowManager
 from system_tray_manager import SystemTrayManager
 from windows_integration import WindowsIntegration
+from linux_integration import LinuxIntegration
 from gui_components import TooltipHelper
 from controllers.watch_controller import WatchController
+from services.uploaded_clips_manager import UploadedClipsManager
+from uploaded_clips_dialog import UploadedClipsDialog
 
 
 class YouTubeUploaderGUI:
@@ -37,7 +40,12 @@ class YouTubeUploaderGUI:
 
         self.notification_manager = NotificationManager(log_callback=self.log)
         self.dialog_manager = DialogManager()
-        self.windows_integration = WindowsIntegration(log_callback=self.log)
+        self.uploaded_clips_manager = UploadedClipsManager(self.file_handler)
+        self.startup_preference_key = (
+            'start_on_login' if sys.platform.startswith('linux') else 'start_with_windows'
+        )
+        integration = LinuxIntegration if sys.platform.startswith('linux') else WindowsIntegration
+        self.windows_integration = integration(log_callback=self.log)
 
         self.system_tray_manager = SystemTrayManager(
             on_show_callback=self._on_show_window,
@@ -292,24 +300,23 @@ class YouTubeUploaderGUI:
         self.start_with_windows_var = tk.BooleanVar(value=False)
         start_with_windows_check = ttk.Checkbutton(
             automation_frame,
-            text="Start with Windows",
+            text="Start on login" if sys.platform.startswith('linux') else "Start with Windows",
             variable=self.start_with_windows_var,
             command=self._on_start_with_windows_changed
         )
         start_with_windows_check.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         create_tooltip(
             start_with_windows_check,
-            "Add YouTube Uploader to Windows startup folder\n"
-            "App will launch automatically when Windows starts\n"
-            "(Requires restart to take effect)"
+            "Launch YouTube Uploader when you log into your desktop session"
+            if sys.platform.startswith('linux') else
+            "Add YouTube Uploader to the Windows startup folder"
         )
 
         if not self.windows_integration.is_startup_available():
             start_with_windows_check.config(state=tk.DISABLED)
             create_tooltip(
                 start_with_windows_check,
-                "Windows startup integration not available\n"
-                "(Requires pywin32 and winshell packages)"
+                "Startup integration is unavailable on this platform"
             )
 
         toast_label = ttk.Label(automation_frame, text="📢 Toast Notifications:", font=("Arial", 9, "bold"))
@@ -457,6 +464,16 @@ class YouTubeUploaderGUI:
             "Useful for one-off uploads"
         )
 
+        self.manage_uploaded_button = ttk.Button(
+            button_frame, text="Uploaded Clips...",
+            command=self._on_manage_uploaded_clips
+        )
+        self.manage_uploaded_button.pack(side=tk.LEFT, padx=2)
+        create_tooltip(
+            self.manage_uploaded_button,
+            "Browse and recycle local archived copies, without deleting YouTube videos"
+        )
+
         # Add some spacing before Exit button
         ttk.Frame(button_frame, width=20).pack(side=tk.LEFT)
 
@@ -542,7 +559,7 @@ class YouTubeUploaderGUI:
         self.scan_subdirectories_var.set(scan_subdirectories)
         self.watch_controller.set_scan_subdirectories(scan_subdirectories)
         self.notify_when_empty_var.set(prefs.get('notify_when_empty', config.DEFAULT_NOTIFY_WHEN_EMPTY))
-        self.start_with_windows_var.set(prefs.get('start_with_windows', False))
+        self.start_with_windows_var.set(prefs.get(self.startup_preference_key, False))
 
         # Apply toast notification preferences
         self.notify_upload_success_var.set(prefs.get('notify_upload_success', config.DEFAULT_NOTIFY_UPLOAD_SUCCESS))
@@ -639,41 +656,29 @@ class YouTubeUploaderGUI:
         self.log(f"Subdirectory scanning {'enabled' if scan_subdirectories else 'disabled'}")
 
     def _on_start_with_windows_changed(self):
-        """Handler for start with Windows checkbox."""
-        start_with_windows = self.start_with_windows_var.get()
-        self._save_preference('start_with_windows', start_with_windows)
-
+        """Configure Windows Startup or Linux XDG autostart."""
+        requested = bool(self.start_with_windows_var.get())
         if not self.windows_integration.is_startup_available():
             self.dialog_manager.show_error(
-                "Feature Unavailable",
-                "Windows startup integration requires:\n"
-                "- pywin32 package\n"
-                "- winshell package\n\n"
-                "Install with: pip install pywin32 winshell"
+                "Feature Unavailable", "System startup integration is unavailable."
             )
             self.start_with_windows_var.set(False)
             return
 
         try:
-            if start_with_windows:
+            if requested:
                 self.windows_integration.add_to_startup()
-                self.log("Added to Windows startup (will launch on boot)")
-                self.dialog_manager.show_info(
-                    "Startup Configured",
-                    f"{config.APP_NAME} will now start automatically when Windows boots.\n\n"
-                    "Note: Restart your computer for this to take effect."
-                )
+                self.log("Enabled launch on desktop login")
             else:
                 self.windows_integration.remove_from_startup()
-                self.log("Removed from Windows startup")
-        except Exception as e:
-            self.log(f"Error configuring Windows startup: {str(e)}")
+                self.log("Disabled launch on desktop login")
+            self._save_preference(self.startup_preference_key, requested)
+        except Exception as error:
+            self.log(f"Error configuring startup: {error}")
             self.dialog_manager.show_error(
-                "Startup Configuration Failed",
-                f"Could not configure Windows startup:\n\n{str(e)}"
+                "Startup Configuration Failed", f"Could not configure startup:\n\n{error}"
             )
-            # Revert checkbox state
-            self.start_with_windows_var.set(not start_with_windows)
+            self.start_with_windows_var.set(not requested)
 
     def _on_notify_upload_success_changed(self):
         notify = self.notify_upload_success_var.get()
@@ -872,6 +877,22 @@ class YouTubeUploaderGUI:
         thread = threading.Thread(target=sort_thread, daemon=True)
         thread.start()
     
+    def _on_manage_uploaded_clips(self):
+        folder = self.folder_path_var.get().strip()
+        if not folder or not os.path.isdir(folder):
+            self.dialog_manager.show_warning(
+                "Choose a watch folder",
+                "Select an existing watch folder before managing its Uploaded archive."
+            )
+            return
+        UploadedClipsDialog(
+            self.root,
+            self.uploaded_clips_manager,
+            folder,
+            self.dialog_manager,
+            logger=self.log,
+        )
+
     def _on_browse_folder(self):
         folder = self.dialog_manager.ask_directory(title="Select Watch Folder")
         if folder:
@@ -1099,7 +1120,8 @@ class YouTubeUploaderGUI:
         }
     
     def _on_show_window(self, icon=None):
-        self.window_manager.restore_from_tray()
+        # Tray callbacks run outside Tk's main thread (pystray / GLib).
+        self._ui_call(self.window_manager.restore_from_tray)
     
     def _quit_application(self):
         def do_quit():
