@@ -14,9 +14,11 @@
 # Run with: pythonw main.pyw (to hide console window)
 # =============================================================================
 
+import os
 import sys
+from pathlib import Path
 import traceback
-from tkinter import messagebox
+from tkinter import Tcl, messagebox
 
 # Import configuration first (validation is executed during startup run sequence)
 import config
@@ -318,4 +320,11 @@ if __name__ == "__main__":
         python main.pyw      # With console window
         pythonw main.pyw     # Without console window (recommended)
     """
+    if sys.argv[1:] == ["--smoke-test"]:
+        # Exercise bundled imports, Tcl initialization and assets without OAuth.
+        Tcl()
+        sys.exit(0 if Path(config.ICON_PATH).is_file() else 1)
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        # Windows stores credentials and state next to the packaged executable.
+        os.chdir(Path(sys.executable).parent)
     sys.exit(main())

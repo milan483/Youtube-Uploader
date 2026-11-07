@@ -1,0 +1,85 @@
+name: Build release packages
+
+on:
+  release:
+    types: [published]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x86_64
+            archive: youtube-uploader-linux-x86_64.tar.gz
+            executable: youtube-uploader
+            tray_backend: pystray._xorg
+            options: ''
+          - runner: windows-latest
+            platform: windows-x86_64
+            archive: youtube-uploader-windows-x86_64.zip
+            executable: youtube-uploader.exe
+            tray_backend: pystray._win32
+            options: --windowed
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install build and runtime dependencies
+        run: python -m pip install -r requirements.txt pyinstaller==6.16.0
+      - name: Bundle application
+        run: >-
+          python -m PyInstaller --noconfirm --onedir --name youtube-uploader
+          --add-data assets:assets --collect-data googleapiclient
+          --hidden-import ${{ matrix.tray_backend }} ${{ matrix.options }} main.pyw
+      - name: Check bundled startup
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "dist/youtube-uploader/${{ matrix.executable }}"
+          $process = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
+      - name: Archive Linux build
+        if: runner.os == 'Linux'
+        run: tar -czf "${{ matrix.archive }}" -C dist youtube-uploader
+      - name: Archive Windows build
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/youtube-uploader -DestinationPath "${{ matrix.archive }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  attach:
+    name: Attach packages to release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload -- "$RELEASE_TAG" \
+            packages/youtube-uploader-linux-x86_64.tar.gz \
+            packages/youtube-uploader-windows-x86_64.zip

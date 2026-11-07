@@ -43,11 +43,15 @@ class WindowsIntegration:
         shortcut_path = os.path.join(startup_folder, config.WINDOWS_STARTUP_SHORTCUT_NAME)
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        main_script = os.path.join(script_dir, 'main.pyw')
+        if getattr(sys, 'frozen', False):
+            startup_target = sys.executable
+            script_dir = os.path.dirname(startup_target)
+        else:
+            startup_target = os.path.join(script_dir, 'main.pyw')
 
         shell = Dispatch('WScript.Shell')
         shortcut = shell.CreateShortCut(shortcut_path)
-        shortcut.TargetPath = main_script
+        shortcut.TargetPath = startup_target
         shortcut.WorkingDirectory = script_dir
         shortcut.WindowStyle = 1
         shortcut.Description = f"{config.APP_NAME} - Automatic YouTube Uploader"
