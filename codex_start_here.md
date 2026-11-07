@@ -14,3 +14,5 @@ This is the durable starting point for future implementation work. Follow [AGENT
 No new implementation task is active. Review the consolidated PR, check the GitHub Actions Windows/Linux matrix, and complete the real Windows Recycle Bin, live YouTube resumable upload, and KDE Plasma Wayland smoke checks if possible.
 
 For later tasks, create a bounded task specification under `.ai/tasks/`, update this entry point to it, and use one dedicated branch and draft PR. Never assume roadmap entries automatically authorize work.
+
+Current follow-up: [Automatic release builds](.ai/tasks/release-builds.md).

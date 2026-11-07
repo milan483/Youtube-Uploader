@@ -35,7 +35,9 @@ class LinuxIntegration:
             raise RuntimeError("XDG autostart is only available on Linux")
         target = self._autostart_path()
         target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-        command = f"{_desktop_exec_quote(sys.executable)} {_desktop_exec_quote(config.PROJECT_DIR / 'main.py')}"
+        command = _desktop_exec_quote(sys.executable)
+        if not getattr(sys, "frozen", False):
+            command += " " + _desktop_exec_quote(config.PROJECT_DIR / "main.py")
         entry = (
             "[Desktop Entry]\n"
             "Type=Application\n"
