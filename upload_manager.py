@@ -3,6 +3,7 @@ import ssl
 import threading
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 import config
@@ -185,6 +186,9 @@ class UploadManager(LoggerMixin):
     def _upload_video_locked(self, filepath, progress_callback=None, watch_root=None):
         """Uploads a video file to YouTube. Returns (success, message, video_id)."""
         filename = os.path.basename(filepath)
+        delete_after_upload = self.state_manager.get_preference(
+            'delete_after_upload', config.DEFAULT_DELETE_AFTER_UPLOAD
+        ) is True
 
         if watch_root is not None:
             # This check deliberately precedes file access, hashing, retry state,
@@ -195,18 +199,19 @@ class UploadManager(LoggerMixin):
             if not FileHandler.is_safe_watch_file(absolute_filepath, absolute_watch_root):
                 return False, f"Unsafe watch-folder path: {filepath}", None
 
-            relative_path = os.path.relpath(
-                os.path.abspath(filepath), os.path.abspath(watch_root)
-            )
-            relative_parts = relative_path.split(os.sep)
-            if (os.path.isabs(relative_path) or not relative_parts or
-                    any(part in (os.curdir, os.pardir, '') for part in relative_parts)):
-                return False, f"Unsafe watch-folder path: {filepath}", None
+            if not delete_after_upload:
+                relative_path = os.path.relpath(
+                    os.path.abspath(filepath), os.path.abspath(watch_root)
+                )
+                relative_parts = relative_path.split(os.sep)
+                if (os.path.isabs(relative_path) or not relative_parts or
+                        any(part in (os.curdir, os.pardir, '') for part in relative_parts)):
+                    return False, f"Unsafe watch-folder path: {filepath}", None
 
-            uploaded_folder = get_uploaded_folder_path(watch_root)
-            archive_destination = os.path.join(uploaded_folder, relative_path)
-            if not self._is_safe_archive_destination(archive_destination, watch_root):
-                return False, f"Unsafe archive path for {filename}", None
+                uploaded_folder = get_uploaded_folder_path(watch_root)
+                archive_destination = os.path.join(uploaded_folder, relative_path)
+                if not self._is_safe_archive_destination(archive_destination, watch_root):
+                    return False, f"Unsafe archive path for {filename}", None
 
         if not os.path.isfile(filepath):
             return False, f"File not found: {filename}", None
@@ -220,6 +225,11 @@ class UploadManager(LoggerMixin):
             return False, error_msg, None
 
         self._log(f"File size: {format_file_size(file_size)}")
+
+        if delete_after_upload:
+            trash_path = Path(filepath).absolute()
+            trash_watch_root = absolute_watch_root if watch_root is not None else None
+            trash_signature = self.file_handler.trash_source_signature(trash_path, trash_watch_root)
 
         self._log(f"Computing hash for {filename}...")
         file_hash = self.file_handler.compute_file_hash(filepath)
@@ -293,6 +303,8 @@ class UploadManager(LoggerMixin):
                     if progress_callback:
                         progress_callback(progress)
             video_id = response['id']
+            if not isinstance(video_id, str) or not video_id.strip():
+                raise UploadError("YouTube did not return a confirmed video ID")
 
         except QuotaExceededError:
             self.state_manager.set_upload_state(filepath, 'failed')
@@ -349,42 +361,53 @@ class UploadManager(LoggerMixin):
                 playlist_warning = f"Playlist add failed: {str(e)}"
                 self._log(playlist_warning)
 
-        if watch_root is None:
-            watch_folder = os.path.dirname(filepath)
-            uploaded_folder = get_uploaded_folder_path(watch_folder)
-            destination = os.path.join(uploaded_folder, filename)
-        else:
-            # Revalidate after the network upload, before creating or moving into
-            # the archive, in case the tree changed while the request was active.
-            uploaded_folder = os.path.dirname(archive_destination)
-            destination = archive_destination
-            if not self._is_safe_archive_destination(destination, watch_root):
-                self._log(f"Warning: Unsafe archive path for {filename}; original file remains.")
-                uploaded_folder = None
-
-        if uploaded_folder is not None and not self.file_handler.ensure_directory_exists(uploaded_folder):
-            self._log(f"Warning: Could not create Uploaded folder: {uploaded_folder}")
-            uploaded_folder = None
-
-        if uploaded_folder is not None:
-            if watch_root is not None:
-                source_is_safe = FileHandler.is_safe_watch_file(
-                    os.path.abspath(filepath), os.path.abspath(watch_root)
-                )
-                destination_is_safe = self._is_safe_archive_destination(destination, watch_root)
-                if not source_is_safe or not destination_is_safe:
-                    self._log(f"Warning: Unsafe watch-folder or archive path for {filename}; original file remains.")
+        if not delete_after_upload:
+            if watch_root is None:
+                watch_folder = os.path.dirname(filepath)
+                uploaded_folder = get_uploaded_folder_path(watch_folder)
+                destination = os.path.join(uploaded_folder, filename)
+            else:
+                # Revalidate after the network upload, before creating or moving into
+                # the archive, in case the tree changed while the request was active.
+                uploaded_folder = os.path.dirname(archive_destination)
+                destination = archive_destination
+                if not self._is_safe_archive_destination(destination, watch_root):
+                    self._log(f"Warning: Unsafe archive path for {filename}; original file remains.")
                     uploaded_folder = None
 
-        if uploaded_folder is not None:
-            move_success, move_msg = self.file_handler.safe_move(filepath, destination, file_hash)
+            if uploaded_folder is not None and not self.file_handler.ensure_directory_exists(uploaded_folder):
+                self._log(f"Warning: Could not create Uploaded folder: {uploaded_folder}")
+                uploaded_folder = None
 
-            if not move_success:
-                self._log(f"Warning: {move_msg}")
-                self._log("File was uploaded but could not be moved. Original file remains.")
+            if uploaded_folder is not None:
+                if watch_root is not None:
+                    source_is_safe = FileHandler.is_safe_watch_file(
+                        os.path.abspath(filepath), os.path.abspath(watch_root)
+                    )
+                    destination_is_safe = self._is_safe_archive_destination(destination, watch_root)
+                    if not source_is_safe or not destination_is_safe:
+                        self._log(f"Warning: Unsafe watch-folder or archive path for {filename}; original file remains.")
+                        uploaded_folder = None
+
+            if uploaded_folder is not None:
+                move_success, move_msg = self.file_handler.safe_move(filepath, destination, file_hash)
+
+                if not move_success:
+                    self._log(f"Warning: {move_msg}")
+                    self._log("File was uploaded but could not be moved. Original file remains.")
 
         self.state_manager.add_upload_to_history(file_hash, filename, video_id)
         self.state_manager.set_upload_state(filepath, 'completed')
+
+        cleanup_warning = None
+        if delete_after_upload:
+            try:
+                self.file_handler.trash_uploaded_source(
+                    trash_path, file_hash, trash_signature, trash_watch_root
+                )
+            except Exception as error:
+                cleanup_warning = f"Local cleanup skipped for {filename}: {error}"
+
         self.session_upload_count += 1
         self.uploads_since_refresh += 1
 
@@ -397,6 +420,8 @@ class UploadManager(LoggerMixin):
         )
         if playlist_warning:
             success_msg = f"{success_msg} (Warning: {playlist_warning})"
+        if cleanup_warning:
+            success_msg = f"{success_msg} (Warning: {cleanup_warning})"
         self._log(success_msg)
 
         return True, success_msg, video_id

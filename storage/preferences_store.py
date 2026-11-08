@@ -22,7 +22,7 @@ class PreferencesStore(LoggerMixin):
 
         optional_string_fields = ['last_watch_folder', 'privacy_setting', 'playlist_title', 'video_category']
         optional_bool_fields = ['autonomous_mode', 'auto_start_watching', 'start_minimized',
-                               'scan_subdirectories',
+                               'scan_subdirectories', 'delete_after_upload',
                                'notify_when_empty', 'auto_close_when_empty', 'start_with_windows',
                                'start_on_login',
                                'notify_upload_success', 'notify_upload_failed', 'notify_quota_exceeded',

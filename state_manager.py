@@ -229,6 +229,7 @@ class StateManager(LoggerMixin):
         defaults = {
             'last_watch_folder': '',
             'scan_subdirectories': False,
+            'delete_after_upload': config.DEFAULT_DELETE_AFTER_UPLOAD,
             'privacy_setting': config.DEFAULT_PRIVACY_SETTING,
             'playlist_title': 'No Playlist',
             'video_category': config.DEFAULT_VIDEO_CATEGORY,

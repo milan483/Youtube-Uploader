@@ -1,6 +1,7 @@
 import hashlib
 import os
 import shutil
+import stat
 import threading
 import tempfile
 from pathlib import Path
@@ -8,6 +9,12 @@ from typing import Optional, Tuple
 import config
 from utils.logging import LoggerMixin
 from utils.config_utils import is_supported_video_file, format_file_size
+
+
+def move_to_system_trash(path):
+    # Keep the dependency lazy so ordinary uploads and archive browsing still work.
+    from send2trash import send2trash
+    send2trash(path)
 
 
 class FileOperationError(Exception):
@@ -418,6 +425,41 @@ class FileHandler(LoggerMixin):
             return True
         except (OSError, ValueError, TypeError):
             return False
+
+    def trash_source_signature(self, filepath, watch_root=None):
+        """Return a signature only for a regular source outside archive/link paths."""
+        path = Path(filepath)
+        if any(part == ".." for part in path.parts):
+            return None
+        try:
+            if watch_root is not None:
+                # Archive exclusions are relative to the watch root. An ancestor
+                # outside that root may legitimately be named "Uploaded".
+                if not self.is_safe_watch_file(path, watch_root):
+                    return None
+            else:
+                # Manual uploads have no watch root, so retain the archive guard
+                # for the selected path while rejecting links and junctions.
+                if any(part.casefold() == "uploaded" for part in path.parts):
+                    return None
+                if any(self._is_link_or_junction(part) for part in (*path.parents, path)):
+                    return None
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                return None
+            return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        except OSError:
+            return None
+
+    def trash_uploaded_source(self, filepath, file_hash, signature, watch_root=None):
+        """Recycle only the unchanged source verified before upload."""
+        with self.archive_lock:
+            if signature is None or self.trash_source_signature(filepath, watch_root) != signature:
+                raise FileOperationError("Source path is unsafe, unavailable, or changed during upload")
+            if (self.compute_file_hash(filepath) != file_hash
+                    or self.trash_source_signature(filepath, watch_root) != signature):
+                raise FileOperationError("Could not verify that the source is unchanged")
+            move_to_system_trash(os.fspath(filepath))
 
     def get_video_files(self, directory_path, recursive=False):
         try:

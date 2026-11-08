@@ -23,7 +23,7 @@ class SequencedRequest:
         if not self.outcomes:
             raise AssertionError("No configured outcomes left")
         outcome = self.outcomes.pop(0)
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, BaseException):
             raise outcome
         if isinstance(outcome, tuple):
             return outcome
@@ -66,12 +66,17 @@ class FakeFileHandler:
 
 
 class FakeStateManager:
-    def __init__(self, uploaded_hashes=None, retry_counts=None):
+    def __init__(self, uploaded_hashes=None, retry_counts=None, delete_after_upload=False):
         self.uploaded_hashes = set(uploaded_hashes or [])
         self.retry_counts = dict(retry_counts or {})
         self.set_state_calls = []
         self.history_calls = []
         self.quota_hits = 0
+        self.delete_after_upload = delete_after_upload
+
+    def get_preference(self, key, default=None):
+        assert key == "delete_after_upload"
+        return self.delete_after_upload
 
     def is_file_uploaded(self, file_hash):
         return file_hash in self.uploaded_hashes
@@ -486,3 +491,171 @@ def test_tls_certificate_errors_are_not_mistaken_for_transient_eof(monkeypatch, 
     assert not manager._is_transient_network_error(error)
     assert len(youtube.insert_calls) == 1
     assert youtube.requests[0].chunk_calls == 1
+
+
+@pytest.fixture
+def trash_upload(monkeypatch, tmp_path):
+    import file_handler
+
+    def setup(outcomes):
+        state = FakeStateManager(delete_after_upload=True)
+        handler = file_handler.FileHandler()
+        manager, filepath, youtube, _, _ = build_upload_manager(
+            monkeypatch, tmp_path, outcomes, state_manager=state, file_handler=handler
+        )
+        calls = []
+
+        def trash(path):
+            assert state.history_calls
+            assert state.set_state_calls[-1]["state"] == "completed"
+            calls.append(path)
+
+        monkeypatch.setattr(file_handler, "move_to_system_trash", trash)
+        return manager, filepath, youtube, state, calls
+
+    return setup
+
+
+@pytest.mark.parametrize("watched", [False, True])
+def test_confirmed_upload_recycles_source_after_recording_success(trash_upload, tmp_path, watched):
+    manager, filepath, _, state, calls = trash_upload([{"id": "confirmed"}])
+
+    success, _, video_id = manager.upload_video(
+        filepath, watch_root=str(tmp_path) if watched else None
+    )
+
+    assert success and video_id == "confirmed"
+    assert calls == [filepath]
+    assert state.history_calls[0][2] == "confirmed"
+    assert not (tmp_path / "Uploaded").exists()
+
+
+@pytest.mark.parametrize("response", [{}, {"id": ""}, {"id": " "}, {"id": None}, RuntimeError("failed")])
+def test_unconfirmed_upload_never_recycles(trash_upload, response):
+    manager, filepath, _, state, calls = trash_upload([response])
+
+    assert manager.upload_video(filepath)[0] is False
+    assert calls == state.history_calls == []
+    assert os.path.isfile(filepath)
+
+
+def test_interrupted_upload_never_recycles(trash_upload):
+    manager, filepath, _, state, calls = trash_upload([KeyboardInterrupt()])
+
+    with pytest.raises(KeyboardInterrupt):
+        manager.upload_video(filepath)
+    assert calls == state.history_calls == []
+    assert os.path.isfile(filepath)
+
+
+def test_duplicate_upload_never_recycles(trash_upload):
+    manager, filepath, youtube, state, calls = trash_upload([])
+    state.uploaded_hashes.add(manager.file_handler.compute_file_hash(filepath))
+
+    assert manager.upload_video(filepath)[0] is False
+    assert youtube.insert_calls == calls == []
+    assert os.path.isfile(filepath)
+
+
+def test_quota_limited_upload_never_recycles(trash_upload, monkeypatch):
+    class QuotaError(Exception):
+        content = b"quotaExceeded"
+
+    monkeypatch.setattr(upload_manager_module, "HttpError", QuotaError)
+    manager, filepath, _, state, calls = trash_upload([QuotaError()])
+
+    with pytest.raises(QuotaExceededError):
+        manager.upload_video(filepath)
+    assert calls == state.history_calls == []
+    assert os.path.isfile(filepath)
+
+
+def test_playlist_warning_still_allows_recycling(trash_upload, monkeypatch):
+    manager, filepath, _, _, calls = trash_upload([{"id": "confirmed"}])
+    manager.selected_playlist_id = "playlist"
+
+    def fail(*args):
+        raise upload_manager_module.UploadError("playlist unavailable")
+
+    monkeypatch.setattr(manager.playlist_service, "add_video_to_playlist", fail)
+    success, message, video_id = manager.upload_video(filepath)
+
+    assert success and video_id == "confirmed"
+    assert "Playlist add failed" in message
+    assert calls == [filepath]
+
+
+@pytest.mark.parametrize("failure", [OSError("Trash unavailable"), ImportError("send2trash unavailable")])
+def test_trash_failure_keeps_upload_successful(trash_upload, monkeypatch, failure):
+    import file_handler
+
+    manager, filepath, _, state, calls = trash_upload([{"id": "confirmed"}])
+
+    def fail(path):
+        calls.append(path)
+        raise failure
+
+    monkeypatch.setattr(file_handler, "move_to_system_trash", fail)
+    success, message, video_id = manager.upload_video(filepath)
+
+    assert success and video_id == "confirmed"
+    assert "Local cleanup skipped" in message and str(failure) in message
+    assert calls == [filepath]
+    assert state.history_calls[0][2] == "confirmed"
+    assert state.set_state_calls[-1]["state"] == "completed"
+    assert os.path.isfile(filepath)
+
+
+def test_history_failure_prevents_recycling(trash_upload, monkeypatch):
+    manager, filepath, _, state, calls = trash_upload([{"id": "confirmed"}])
+
+    def fail(*args):
+        raise OSError("history write failed")
+
+    monkeypatch.setattr(state, "add_upload_to_history", fail)
+    with pytest.raises(OSError, match="history write failed"):
+        manager.upload_video(filepath)
+
+    assert calls == []
+    assert os.path.isfile(filepath)
+
+
+@pytest.mark.parametrize("change", ["contents", "junction"])
+def test_source_changed_during_upload_is_preserved(trash_upload, monkeypatch, tmp_path, change):
+    from pathlib import Path
+
+    manager, filepath, _, state, calls = trash_upload([{"id": "confirmed"}])
+    original_next_chunk = SequencedRequest.next_chunk
+    source = Path(filepath)
+
+    def change_source(request):
+        if change == "contents":
+            source.write_bytes(b"new content")
+        else:
+            monkeypatch.setattr(
+                type(manager.file_handler), "_is_link_or_junction",
+                staticmethod(lambda path: Path(path) == source),
+            )
+        return original_next_chunk(request)
+
+    monkeypatch.setattr(SequencedRequest, "next_chunk", change_source)
+    success, message, _ = manager.upload_video(filepath, watch_root=str(tmp_path))
+
+    assert success
+    assert "Local cleanup skipped" in message
+    assert calls == []
+    assert source.read_bytes() == (b"new content" if change == "contents" else b"video-bytes")
+    assert state.set_state_calls[-1]["state"] == "completed"
+
+
+def test_manual_upload_never_recycles_an_existing_archive(trash_upload, tmp_path):
+    manager, _, _, _, calls = trash_upload([{"id": "confirmed"}])
+    archive = tmp_path / "Uploaded" / "old.mp4"
+    archive.parent.mkdir()
+    archive.write_bytes(b"old clip")
+
+    success, message, _ = manager.upload_video(str(archive))
+
+    assert success and "Local cleanup skipped" in message
+    assert calls == []
+    assert archive.read_bytes() == b"old clip"

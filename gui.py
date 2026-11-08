@@ -281,6 +281,20 @@ class YouTubeUploaderGUI:
             "Also scan folders inside the watch folder for videos"
         )
 
+        self.delete_after_upload_var = tk.BooleanVar(value=config.DEFAULT_DELETE_AFTER_UPLOAD)
+        delete_after_upload_check = ttk.Checkbutton(
+            automation_frame,
+            text="Delete local videos after successful upload (move to Trash)",
+            variable=self.delete_after_upload_var,
+            command=self._on_delete_after_upload_changed
+        )
+        delete_after_upload_check.grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
+        create_tooltip(
+            delete_after_upload_check,
+            "Move successfully uploaded local videos to the OS Trash/Recycle Bin "
+            "instead of the Uploaded archive. Restore them from Trash before it is emptied."
+        )
+
         # Notify when empty checkbox
         self.notify_when_empty_var = tk.BooleanVar(value=config.DEFAULT_NOTIFY_WHEN_EMPTY)
         notify_empty_check = ttk.Checkbutton(
@@ -558,6 +572,9 @@ class YouTubeUploaderGUI:
         scan_subdirectories = prefs.get('scan_subdirectories', False)
         self.scan_subdirectories_var.set(scan_subdirectories)
         self.watch_controller.set_scan_subdirectories(scan_subdirectories)
+        self.delete_after_upload_var.set(
+            prefs.get('delete_after_upload', config.DEFAULT_DELETE_AFTER_UPLOAD)
+        )
         self.notify_when_empty_var.set(prefs.get('notify_when_empty', config.DEFAULT_NOTIFY_WHEN_EMPTY))
         self.start_with_windows_var.set(prefs.get(self.startup_preference_key, False))
 
@@ -654,6 +671,9 @@ class YouTubeUploaderGUI:
         self.watch_controller.set_scan_subdirectories(scan_subdirectories)
         self._save_preference('scan_subdirectories', scan_subdirectories)
         self.log(f"Subdirectory scanning {'enabled' if scan_subdirectories else 'disabled'}")
+
+    def _on_delete_after_upload_changed(self):
+        self._save_preference('delete_after_upload', self.delete_after_upload_var.get())
 
     def _on_start_with_windows_changed(self):
         """Configure Windows Startup or Linux XDG autostart."""
@@ -950,7 +970,7 @@ class YouTubeUploaderGUI:
                     self._ui_call(
                         self.dialog_manager.show_info,
                         "Upload Successful",
-                        f"Video uploaded successfully!\n\n"
+                        f"{message}\n\n"
                         f"File: {os.path.basename(filepath)}\n"
                         f"Video ID: {video_id}"
                     )

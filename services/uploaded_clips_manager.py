@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from file_handler import FileHandler
+from file_handler import FileHandler, move_to_system_trash
 from utils.config_utils import get_uploaded_folder_path, is_supported_video_file
 
 
@@ -24,18 +24,12 @@ class DeleteResult:
     failed: dict
 
 
-def _system_trash(path):
-    # Lazy import permits read-only browsing when optional dependency is absent.
-    from send2trash import send2trash
-    send2trash(path)
-
-
 class UploadedClipsManager:
     """Filesystem-only archive manager; never touches YouTube or state files."""
 
     def __init__(self, file_handler, trash_func=None):
         self.file_handler = file_handler
-        self._trash = trash_func or _system_trash
+        self._trash = trash_func or move_to_system_trash
 
     @staticmethod
     def _no_link_components(path):
