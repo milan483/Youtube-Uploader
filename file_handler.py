@@ -429,14 +429,21 @@ class FileHandler(LoggerMixin):
     def trash_source_signature(self, filepath, watch_root=None):
         """Return a signature only for a regular source outside archive/link paths."""
         path = Path(filepath)
-        if any(part == ".." or part.casefold() == "uploaded" for part in path.parts):
+        if any(part == ".." for part in path.parts):
             return None
         try:
             if watch_root is not None:
+                # Archive exclusions are relative to the watch root. An ancestor
+                # outside that root may legitimately be named "Uploaded".
                 if not self.is_safe_watch_file(path, watch_root):
                     return None
-            elif any(self._is_link_or_junction(part) for part in (*path.parents, path)):
-                return None
+            else:
+                # Manual uploads have no watch root, so retain the archive guard
+                # for the selected path while rejecting links and junctions.
+                if any(part.casefold() == "uploaded" for part in path.parts):
+                    return None
+                if any(self._is_link_or_junction(part) for part in (*path.parents, path)):
+                    return None
             info = path.lstat()
             if not stat.S_ISREG(info.st_mode):
                 return None
