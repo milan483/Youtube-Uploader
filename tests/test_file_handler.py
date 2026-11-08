@@ -301,3 +301,22 @@ def test_trash_source_signature_rejects_symlink(tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("Symlinks are unavailable")
     assert FileHandler().trash_source_signature(link) is None
+
+def test_trash_watched_source_allows_uploaded_ancestor(tmp_path, monkeypatch):
+    import file_handler
+
+    watch_root = tmp_path / "Uploaded" / "watch"
+    source = watch_root / "clip.mp4"
+    write_binary_file(source, b"video")
+    handler = FileHandler()
+    file_hash = handler.compute_file_hash(source)
+    signature = handler.trash_source_signature(source, watch_root=watch_root)
+
+    assert signature is not None
+    calls = []
+    monkeypatch.setattr(file_handler, "move_to_system_trash", calls.append)
+
+    handler.trash_uploaded_source(source, file_hash, signature, watch_root=watch_root)
+
+    assert calls == [os.fspath(source)]
+    assert source.exists()
