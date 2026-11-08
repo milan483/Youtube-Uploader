@@ -267,3 +267,37 @@ def test_failed_source_removal_preserves_original_and_rolls_back_duplicate(tmp_p
     assert not success
     assert source.read_bytes() == b"original"
     assert not destination.exists()
+
+
+def test_trash_rechecks_content_even_when_source_signature_matches(tmp_path, monkeypatch):
+    import pytest
+    import file_handler
+
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"replacement")
+    handler = FileHandler()
+    signature = handler.trash_source_signature(source)
+    calls = []
+    monkeypatch.setattr(file_handler, "move_to_system_trash", calls.append)
+
+    with pytest.raises(file_handler.FileOperationError, match="unchanged"):
+        handler.trash_uploaded_source(source, "previous-upload-hash", signature)
+    assert calls == []
+    assert source.read_bytes() == b"replacement"
+
+
+def test_trash_source_signature_rejects_non_regular_paths(tmp_path):
+    assert FileHandler().trash_source_signature(tmp_path) is None
+
+
+def test_trash_source_signature_rejects_symlink(tmp_path):
+    import pytest
+
+    source = tmp_path / "real.mp4"
+    source.write_bytes(b"video")
+    link = tmp_path / "link.mp4"
+    try:
+        link.symlink_to(source)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks are unavailable")
+    assert FileHandler().trash_source_signature(link) is None

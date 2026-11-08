@@ -116,3 +116,21 @@ def test_retry_count_survives_uploading_and_pending_transitions(configured_state
     manager.set_upload_state(filepath, "completed")
     assert manager.get_retry_count(filepath) == 0
     assert manager.get_retry_info(filepath)["next_retry_time"] is None
+
+
+@pytest.mark.parametrize("existing_preferences", [None, '{"scan_subdirectories": true}'])
+def test_delete_after_upload_defaults_off_and_persists(configured_state_files, existing_preferences):
+    if existing_preferences is not None:
+        configured_state_files["USER_PREFERENCES_FILE"].write_text(existing_preferences, encoding="utf-8")
+    manager = StateManager()
+    assert manager.get_all_preferences()["delete_after_upload"] is False
+
+    manager.set_preference("delete_after_upload", True)
+    assert StateManager().get_all_preferences()["delete_after_upload"] is True
+
+
+def test_non_boolean_delete_after_upload_is_rejected(configured_state_files):
+    configured_state_files["USER_PREFERENCES_FILE"].write_text(
+        '{"delete_after_upload": "true"}', encoding="utf-8"
+    )
+    assert StateManager().get_all_preferences()["delete_after_upload"] is False

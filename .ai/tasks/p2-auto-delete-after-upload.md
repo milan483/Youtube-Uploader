@@ -1,6 +1,6 @@
 # P2 — Optional automatic deletion after successful uploads
 
-- **Status:** Specification ready; implementation pending.
+- **Status:** Implemented and locally validated. See [PR #8](https://github.com/milan483/Youtube-Uploader/pull/8) for CI and review.
 - **Repository:** `milan483/Youtube-Uploader`
 - **Branch:** `feat/auto-delete-after-upload`
 - **Base:** `main`
@@ -78,3 +78,26 @@ Add an Automation Settings checkbox:
 ## Handoff
 
 Read `AGENTS.md`, `codex_start_here.md`, `ARCHITECTURE.md`, and this task specification before editing. Preserve local changes. Keep implementation limited to this task, update this document with evidence, and do not merge or publish a release.
+## Implementation and verification
+
+- The Automation Settings checkbox saves a default-off boolean. UploadManager
+  snapshots it per upload for both entry points.
+- The enabled path requires a confirmed video ID and successful history and
+  completed-state writes. FileHandler holds the archive lock while validating
+  source containment, link components, regular-file type, metadata, and hash
+  before calling the shared lazy Trash adapter. Archive files are excluded.
+- Cleanup warnings preserve the successful upload result and appear in the log
+  and the manual upload result dialog. The existing archive flow still applies
+  with the option off.
+- Focused command `python -m pytest tests/test_upload_manager.py tests/test_file_handler.py tests/test_state_manager.py tests/test_json_store_and_schemas.py tests/test_uploaded_clips_manager.py -q` passed with **84 tests**.
+- Full command `python -m pytest -q` passed with **114 tests**.
+- Both commands used a local Python 3.13.16 virtual environment. The first
+  focused run failed one test because the mock did not raise KeyboardInterrupt.
+  The corrected mock exercised the interruption path and both final runs passed.
+  `git diff --check` passed.
+- GitHub Windows and Linux matrix results for the pushed commit are recorded in
+  the [PR #8](https://github.com/milan483/Youtube-Uploader/pull/8) report.
+- Manual Windows Recycle Bin and Linux desktop Trash smoke tests were not run.
+  The automated tests use mocked Trash operations and YouTube responses.
+  An external process can still change a path between its final verification
+  and the OS Trash operation.

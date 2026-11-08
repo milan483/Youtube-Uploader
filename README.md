@@ -583,6 +583,7 @@ Everyone else: No access
 {
   "last_watch_folder": "C:/Videos/ToUpload",
   "scan_subdirectories": false,
+  "delete_after_upload": false,
   "privacy_setting": "unlisted",
   "playlist_title": "My Gaming Clips",
   "video_category": "Gaming",
@@ -722,3 +723,16 @@ if you want desktop notifications.
 The **Build release packages** workflow also makes downloadable build artifacts
 on pull requests and manual runs. Release assets are attached only when a
 release is published. Tag a commit containing the workflow.
+
+## Automatic cleanup after uploads
+
+In **Automation Settings**, enable **Delete local videos after successful upload
+(move to Trash)** to recycle the local source after a confirmed watched-folder
+or manual upload. The option defaults to off, so successful uploads normally
+move to `Uploaded/`.
+
+With cleanup enabled, the app records the upload and checks that the source is
+unchanged before sending it to the Windows Recycle Bin or Linux desktop Trash.
+If the source cannot be verified or Trash fails, the app reports a warning and
+keeps the upload recorded as successful. Existing `Uploaded/` clips remain
+available in the Uploaded Clips Manager. This setting affects only local files.

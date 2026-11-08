@@ -15,7 +15,7 @@ This document describes the current runtime architecture, module boundaries, and
 3. GUI builds `WatchController` and wires callback maps.
 4. `WatchController` runs polling loop and calls `BatchUploader`.
 5. `BatchUploader` calls `UploadManager.upload_video(..., watch_root=folder_path)` per file.
-6. `UploadManager` performs upload, retry/quota handling, playlist add, and safe move.
+6. `UploadManager` performs upload, retry/quota handling, playlist add, and local archive or Trash cleanup.
 7. `StateManager` persists upload/quota/retry/preferences/sort state through `storage/*`.
 
 ## Layered Responsibilities
@@ -66,7 +66,7 @@ This document describes the current runtime architecture, module boundaries, and
     - transient fast-retry vs. scheduled retry
     - quota detection/cooldown recording
     - playlist insertion
-    - safe post-upload file move
+    - safe post-upload archive move or opt-in Trash cleanup
 
 ### State and Persistence
 
@@ -247,3 +247,20 @@ Notes:
 - StateManager preserves retry count across failed, uploading and pending state transitions; completion clears retry metadata.
 - SSL EOF and connection resets are transient; certificate-verification errors are not.
 - Resumable session offsets are not persisted across application restarts.
+
+## P2 automatic source cleanup
+
+- `delete_after_upload` is a validated boolean preference and defaults to false.
+  UploadManager reads it when each watched or manual upload begins.
+- With the option off, UploadManager uses the existing archive flow. With it on,
+  a non-empty YouTube video ID, persisted history, and persisted completed state
+  are required before Trash is attempted. A playlist warning still permits cleanup.
+- FileHandler holds `archive_lock` while it validates the source, compares its
+  identity and metadata with the pre-upload snapshot, recomputes its hash, and
+  calls the same lazy `send2trash` adapter as the Uploaded Clips Manager.
+  Watched sources also require watch-root containment. Paths through links,
+  junctions, and archive folders are ineligible for automatic cleanup.
+- Cleanup failures surface as warnings on the successful upload outcome.
+  The app uses no permanent deletion fallback. Path checks and Trash are
+  separate OS operations and do not defend against concurrent external replacement
+  in the gap between the final check and the Trash call.
