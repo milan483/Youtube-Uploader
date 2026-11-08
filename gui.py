@@ -289,6 +289,11 @@ class YouTubeUploaderGUI:
             command=self._on_delete_after_upload_changed
         )
         delete_after_upload_check.grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
+        create_tooltip(
+            delete_after_upload_check,
+            "Move successfully uploaded local videos to the OS Trash/Recycle Bin "
+            "instead of the Uploaded archive. Restore them from Trash before it is emptied."
+        )
 
         # Notify when empty checkbox
         self.notify_when_empty_var = tk.BooleanVar(value=config.DEFAULT_NOTIFY_WHEN_EMPTY)
