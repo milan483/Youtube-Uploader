@@ -51,5 +51,8 @@ Local validation on 2026-11-14:
 Evidence and isolated Python environments are under
 `/home/kylan/.codex/outputs/youtube-uploader-retry-settings-20261114/`.
 Windows desktop interaction and live YouTube uploads have not been run.
-CI and draft PR references will be recorded after branch publication.
+Implementation commit: `0baee54680a1eee5f48f0837ab94f88ca7de7ebe`.
+Draft PR: [#9](https://github.com/milan483/Youtube-Uploader/pull/9).
+Windows/Linux tests and package builds run on the PR; see its check results
+for CI evidence, separate from the local validation above.
 No release has been published.
