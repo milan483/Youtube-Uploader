@@ -52,6 +52,7 @@ def test_validation_failure_does_not_save_or_close(monkeypatch):
     dialog = make_dialog({**DEFAULT_RETRY_SETTINGS, 'max_upload_retry_attempts': '1.5'})
     dialog._save()
     assert errors and dialog.state_manager.saved == []
+    assert 'whole number' in errors[0][1]
     assert not dialog.window.closed
 
 

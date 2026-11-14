@@ -65,6 +65,13 @@ class RetrySettingsDialog:
                 key: int(self.vars[key].get().strip())
                 for key, _, _ in RETRY_FIELDS
             }
+        except (ValueError, TypeError):
+            messagebox.showerror(
+                'Invalid Retry Settings', 'Enter a whole number for each setting.',
+                parent=self.window,
+            )
+            return
+        try:
             settings = validate_retry_settings(requested)
         except (ValueError, TypeError) as error:
             messagebox.showerror('Invalid Retry Settings', str(error), parent=self.window)
