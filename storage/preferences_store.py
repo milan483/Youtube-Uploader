@@ -1,5 +1,6 @@
 import config
 from utils.logging import LoggerMixin
+from utils.retry_settings import RETRY_SETTING_KEYS, effective_retry_settings
 
 
 class PreferencesStore(LoggerMixin):
@@ -8,10 +9,18 @@ class PreferencesStore(LoggerMixin):
         self.logger = logger
 
     def load(self):
-        return self.json_store.load_json_with_validation(
+        saved = self.json_store.load_json_with_validation(
             config.USER_PREFERENCES_FILE,
             self._validate_schema
         )
+        # Repair malformed retry fields without losing unrelated preferences.
+        if not isinstance(saved, dict):
+            return {}
+        effective = effective_retry_settings(saved)
+        for key in RETRY_SETTING_KEYS:
+            if key in saved:
+                saved[key] = effective[key]
+        return saved
 
     def save(self, data):
         self.json_store.atomic_write_json(config.USER_PREFERENCES_FILE, data)
@@ -27,6 +36,9 @@ class PreferencesStore(LoggerMixin):
                                'start_on_login',
                                'notify_upload_success', 'notify_upload_failed', 'notify_quota_exceeded',
                                'notify_batch_complete']
+
+        # Retry fields are sanitized by load() instead of rejecting the entire
+        # preference document when one retry field is malformed.
 
         for field in optional_string_fields:
             if field in data and not isinstance(data[field], str):

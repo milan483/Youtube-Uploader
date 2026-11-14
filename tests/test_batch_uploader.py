@@ -6,6 +6,7 @@ import config
 import pytest
 
 from services.batch_uploader import BatchUploader
+from utils.retry_settings import DEFAULT_RETRY_SETTINGS
 
 
 class FakeFileHandler:
@@ -17,15 +18,20 @@ class FakeFileHandler:
 
 
 class FakeStateManager:
-    def __init__(self, states=None, retry_ready=None, retry_info=None):
+    def __init__(self, states=None, retry_ready=None, retry_info=None,
+                 retry_settings=None):
         self.states = states or {}
         self.retry_ready = retry_ready or {}
         self.retry_info = retry_info or {}
+        self.retry_settings = {**DEFAULT_RETRY_SETTINGS, **(retry_settings or {})}
+
+    def get_retry_settings(self):
+        return self.retry_settings.copy()
 
     def get_upload_state(self, filepath):
         return self.states.get(filepath)
 
-    def is_ready_for_retry(self, filepath):
+    def is_ready_for_retry(self, filepath, retry_settings=None):
         return self.retry_ready.get(filepath, True)
 
     def get_retry_info(self, filepath):
@@ -251,3 +257,70 @@ def test_batch_revalidates_sources_after_discovery(tmp_path, monkeypatch):
 
     assert manager.upload_calls == []
     assert result["fail_count"] == 1
+
+
+def test_batch_exhausted_classification_uses_configured_limit(tmp_path, monkeypatch):
+    install_fake_quota_error(monkeypatch)
+    source = tmp_path / 'clip.mp4'
+    source.write_bytes(b'clip')
+    filepath = str(source)
+    state = FakeStateManager(
+        states={filepath: 'failed'},
+        retry_ready={filepath: False},
+        retry_info={filepath: {'retry_count': 4, 'next_retry_time': None}},
+        retry_settings={'max_upload_retry_attempts': 4},
+    )
+    manager = FakeUploadManager([], state_manager=state)
+    results = BatchUploader(manager, FakeFileHandler(['clip.mp4'])).upload_folder(str(tmp_path))
+
+    assert results['fail_count'] == 1
+    assert results['skip_count'] == 0
+    assert manager.upload_calls == []
+
+
+def test_batch_distinguishes_deferred_retry_from_exhausted(tmp_path, monkeypatch):
+    install_fake_quota_error(monkeypatch)
+    source = tmp_path / 'clip.mp4'
+    source.write_bytes(b'clip')
+    filepath = str(source)
+    state = FakeStateManager(
+        states={filepath: 'failed'},
+        retry_ready={filepath: False},
+        retry_info={filepath: {
+            'retry_count': 4,
+            'next_retry_time': '2099-01-01T12:00:00',
+        }},
+        retry_settings={'max_upload_retry_attempts': 6},
+    )
+    manager = FakeUploadManager([], state_manager=state)
+    results = BatchUploader(manager, FakeFileHandler(['clip.mp4'])).upload_folder(str(tmp_path))
+
+    assert results['fail_count'] == 0
+    assert results['skip_count'] == 1
+    assert manager.upload_calls == []
+
+
+def test_batch_uses_one_retry_policy_when_settings_change_during_discovery(tmp_path, monkeypatch):
+    install_fake_quota_error(monkeypatch)
+    (tmp_path / 'clip.mp4').write_bytes(b'clip')
+    filepath = str(tmp_path / 'clip.mp4')
+    state = FakeStateManager(
+        states={filepath: 'failed'},
+        retry_info={filepath: {'retry_count': 4, 'next_retry_time': None}},
+        retry_settings={'max_upload_retry_attempts': 4},
+    )
+    observed = []
+
+    def changed_settings_on_check(path, retry_settings=None):
+        state.retry_settings['max_upload_retry_attempts'] = 8
+        observed.append(retry_settings['max_upload_retry_attempts'])
+        return state.get_retry_info(path)['retry_count'] < retry_settings['max_upload_retry_attempts']
+
+    state.is_ready_for_retry = changed_settings_on_check
+    manager = FakeUploadManager([], state_manager=state)
+    result = BatchUploader(manager, FakeFileHandler(['clip.mp4'])).upload_folder(str(tmp_path))
+
+    assert observed == [4]
+    assert result['fail_count'] == 1
+    assert result['skip_count'] == 0
+    assert manager.upload_calls == []

@@ -135,7 +135,8 @@ This document describes the current runtime architecture, module boundaries, and
 When available, `BatchUploader` assumes `upload_manager.state_manager` implements:
 
 - `get_upload_state(filepath)`
-- `is_ready_for_retry(filepath)`
+- `get_retry_settings()` returns a validated settings snapshot.
+- `is_ready_for_retry(filepath, retry_settings=None)` optionally uses a caller's settings snapshot.
 - `get_retry_info(filepath)`
 
 `UploadManager` additionally relies on:
@@ -264,3 +265,16 @@ Notes:
   The app uses no permanent deletion fallback. Path checks and Trash are
   separate OS operations and do not defend against concurrent external replacement
   in the gap between the final check and the Trash call.
+
+## Configurable scheduled retries
+
+- `utils/retry_settings.py` defines shared field names, bounds, defaults, strict validation and safe fallback behavior.
+- `PreferencesStore.load()` sanitizes malformed retry fields individually without rejecting unrelated valid preferences. A cross-field delay conflict resets both delay fields to defaults.
+- `StateManager.get_retry_settings()` supplies effective validated settings. `set_retry_settings()` validates all fields before saving one complete preferences document and updates in-memory preferences only after persistence succeeds.
+- `max_upload_retry_attempts` includes the initial attempt and is bounded to 1-100. Delay values are seconds, each bounded to 1-86400, with maximum delay at least the initial delay. Defaults are 3, 60 and 3600 respectively.
+- `StateManager.is_ready_for_retry()` uses the effective attempt limit. Increasing that limit can make an exhausted failed upload eligible again without clearing its retry history.
+- `BatchUploader` snapshots retry settings for each eligibility pass and passes that snapshot to `is_ready_for_retry`. Exhausted versus deferred classification uses the same limit. Retry-state paths and callback contracts are unchanged.
+- `UploadManager` snapshots settings at the beginning of each serialized upload. Scheduled retry backoff and exhaustion use that snapshot so changes during an upload do not split its retry policy.
+- Previously stored `next_retry_time` values are not rewritten when settings change.
+- Internal transient transport retries retain their existing fixed delay and limit. They use the same resumable request and are distinct from scheduled upload attempts.
+- `RetrySettingsDialog` owns validation feedback, Defaults, Cancel and Save actions. The GUI exposes it through a compact button in the existing Automation Settings panel.

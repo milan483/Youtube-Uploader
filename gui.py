@@ -17,6 +17,7 @@ from gui_components import TooltipHelper
 from controllers.watch_controller import WatchController
 from services.uploaded_clips_manager import UploadedClipsManager
 from uploaded_clips_dialog import UploadedClipsDialog
+from retry_settings_dialog import RetrySettingsDialog
 
 
 class YouTubeUploaderGUI:
@@ -332,6 +333,11 @@ class YouTubeUploaderGUI:
                 start_with_windows_check,
                 "Startup integration is unavailable on this platform"
             )
+
+        retry_settings_button = ttk.Button(
+            automation_frame, text='Retry Settings...', command=self._on_retry_settings
+        )
+        retry_settings_button.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
         toast_label = ttk.Label(automation_frame, text="📢 Toast Notifications:", font=("Arial", 9, "bold"))
         toast_label.grid(row=0, column=2, sticky=tk.W, padx=(15, 5), pady=(2, 0))
@@ -699,6 +705,12 @@ class YouTubeUploaderGUI:
                 "Startup Configuration Failed", f"Could not configure startup:\n\n{error}"
             )
             self.start_with_windows_var.set(not requested)
+
+    def _on_retry_settings(self):
+        RetrySettingsDialog(
+            self.root, self.state_manager,
+            on_saved=lambda _settings: self.log('Retry settings updated')
+        )
 
     def _on_notify_upload_success_changed(self):
         notify = self.notify_upload_success_var.get()

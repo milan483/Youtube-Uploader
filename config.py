@@ -4,7 +4,7 @@ from pathlib import Path
 
 # App
 APP_NAME = "YouTube Uploader"
-APP_VERSION = "2.0.1"
+APP_VERSION = "0.2.2"
 APP_AUTHOR = "GRard"
 
 # Paths

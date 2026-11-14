@@ -11,14 +11,14 @@ This is the durable starting point for future implementation work. Follow [AGENT
 
 ## Active implementation task
 
-**P2 — Optional automatic deletion after successful uploads**
+**User retry settings for 0.2.2**
 
-- Task specification: [.ai/tasks/p2-auto-delete-after-upload.md](.ai/tasks/p2-auto-delete-after-upload.md).
-- Work branch: `feat/auto-delete-after-upload`.
-- Keep `delete_after_upload` disabled by default.
-- When enabled, send a confirmed uploaded local file to OS Trash/Recycle Bin instead of moving it into `Uploaded/`.
-- Preserve current archive behavior when disabled. Never permanently delete files or delete remote YouTube videos.
-- The task specification defines the lifecycle, safety checks, tests, and acceptance criteria.
+- Task specification: [.ai/tasks/user-retry-settings.md](.ai/tasks/user-retry-settings.md).
+- Work branch: `feat/user-retry-settings`.
+- Add saved user controls for upload attempts and initial/maximum retry delays.
+- Preserve existing preferences, retry deadlines, and internal transport retries.
+- P2 automatic deletion is merged in [PR #8](https://github.com/milan483/Youtube-Uploader/pull/8).
+- Do not publish a release without explicit approval.
 
 Read the task specification and relevant sections of [ARCHITECTURE.md](ARCHITECTURE.md) before editing. Preserve local changes, run focused and full tests, update the task document with exact evidence, and report implementation/validation on the draft PR.
 

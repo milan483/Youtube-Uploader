@@ -1,7 +1,6 @@
 import os
 import ntpath
 from datetime import datetime
-import config
 from file_handler import FileHandler
 from utils.logging import LoggerMixin
 from utils.upload_utils import is_skip_message
@@ -70,12 +69,14 @@ class BatchUploader(LoggerMixin):
         deferred_files = []
         exhausted_files = []
         if state_manager:
+            retry_settings = state_manager.get_retry_settings()
+            retry_limit = retry_settings['max_upload_retry_attempts']
             for filepath in filepaths:
                 state = state_manager.get_upload_state(filepath)
-                if state == 'failed' and not state_manager.is_ready_for_retry(filepath):
+                if state == 'failed' and not state_manager.is_ready_for_retry(filepath, retry_settings):
                     retry_info = state_manager.get_retry_info(filepath)
                     retry_count = retry_info.get('retry_count', 0)
-                    if retry_count >= config.MAX_UPLOAD_RETRY_ATTEMPTS:
+                    if retry_count >= retry_limit:
                         exhausted_files.append((filepath, retry_count))
                     else:
                         deferred_files.append(filepath)

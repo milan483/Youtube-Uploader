@@ -42,7 +42,7 @@ Notes:
 - **User preferences** - Remembers last-used settings across sessions
 
 ### Advanced Features
-- **Retry mechanism** - Failed uploads automatically retry with exponential backoff (3 total attempts: initial + 2 retries)
+- **Retry mechanism** - Configurable upload attempts and retry delays, with defaults of 3 total attempts (initial + 2 retries)
 - **File lock handling** - Robust retry logic for antivirus/slow disk situations
 - **Hash caching** - Optimized to avoid redundant hash calculations
 - **Client refresh + connection warmup** - Refreshes aging YouTube clients and verifies connectivity before folder batches
@@ -431,11 +431,20 @@ Manual actions (`Upload File...`, playlist sort) can still call the API and may 
 
 ### Retry Logic
 For failed uploads (non-quota errors):
-- **Automatic retry**: 3 total attempts (initial + 2 retries)
-- **Exponential backoff**: 1 min, then 2 min
+- **Maximum upload attempts**: Configurable under **Automation Settings > Retry Settings...**. Default 3, allowed range 1-100. This is the total number of scheduled upload attempts, including the initial upload. Setting 1 disables scheduled retries.
+- **Initial retry delay**: Default 60 seconds, allowed range 1-86400 seconds.
+- **Maximum retry delay**: Default 3600 seconds, allowed range 1-86400 seconds. It must be greater than or equal to the initial delay.
+- **Exponential backoff**: Scheduled delays double after each failed attempt until the configured maximum is reached. Transient failures use the configured initial delay after internal transport retries have been exhausted.
 - **Smart tracking**: Retry count and next retry time stored
-- **Transient network fast-retry**: Connection-reset/timeout style errors get short-delay retries before normal backoff scheduling
+- **When changes apply**: New settings apply when a new upload attempt begins. An upload already in progress retains its starting settings. Previously stored `next_retry_time` deadlines are not recalculated.
+- **Exhausted uploads**: Increasing the maximum attempts can make previously exhausted failed files eligible for retry again. Existing future retry deadlines still apply.
+- **Transient network fast-retry**: Connection-reset, SSL EOF and similar errors get up to three internal transport retries using the existing fixed 5-second delay within one upload attempt. These are separate from the configurable scheduled attempt limit and do not introduce another setting.
+- **Saved preferences**: Settings persist in `user_preferences.json`. Older preference files use defaults of 3 attempts, 60 seconds and 3600 seconds. Invalid saved retry values fall back to safe defaults without discarding other valid preferences.
 - **Manual intervention**: Only required after all retries exhausted
+
+The **Restore Defaults** button in Retry Settings restores the original values in the dialog without saving. **Cancel** discards edits. **Save** validates all three values and writes them together; if saving fails, the dialog stays open and displays the error.
+
+The configured maximum controls scheduled upload attempts, not the short internal retries of the Google resumable-upload request. Changing it does not modify the existing transport retry delay or its internal retry count.
 
 ---
 
@@ -464,7 +473,7 @@ For failed uploads (non-quota errors):
 
 ### Upload fails repeatedly
 - Check log window for specific error
-- Failed uploads are attempted up to 3 total times (initial + 2 retries)
+- Failed uploads default to 3 total attempts (initial + 2 retries). Adjust the limit and delays under **Automation Settings > Retry Settings...**.
 - Manual intervention is needed after those attempts are exhausted
 - Check file permissions and disk space
 
@@ -584,6 +593,9 @@ Everyone else: No access
   "last_watch_folder": "C:/Videos/ToUpload",
   "scan_subdirectories": false,
   "delete_after_upload": false,
+  "max_upload_retry_attempts": 3,
+  "initial_retry_delay_seconds": 60,
+  "max_retry_delay_seconds": 3600,
   "privacy_setting": "unlisted",
   "playlist_title": "My Gaming Clips",
   "video_category": "Gaming",
