@@ -186,6 +186,7 @@ class UploadManager(LoggerMixin):
     def _upload_video_locked(self, filepath, progress_callback=None, watch_root=None):
         """Uploads a video file to YouTube. Returns (success, message, video_id)."""
         filename = os.path.basename(filepath)
+        retry_settings = self.state_manager.get_retry_settings()
         delete_after_upload = self.state_manager.get_preference(
             'delete_after_upload', config.DEFAULT_DELETE_AFTER_UPLOAD
         ) is True
@@ -314,16 +315,16 @@ class UploadManager(LoggerMixin):
             is_transient = self._is_transient_network_error(error)
             if is_transient:
                 error_type = "transient network error (retries exhausted)"
-                delay = config.INITIAL_RETRY_DELAY_SECONDS
+                delay = retry_settings['initial_retry_delay_seconds']
             else:
                 error_type = "error"
                 delay = min(
-                    config.INITIAL_RETRY_DELAY_SECONDS * (2 ** (retry_count - 1)),
-                    config.MAX_RETRY_DELAY_SECONDS
+                    retry_settings['initial_retry_delay_seconds'] * (2 ** (retry_count - 1)),
+                    retry_settings['max_retry_delay_seconds']
                 )
-            delay_msg = f"{delay // 60} minute(s)"
+            delay_msg = f"{delay} second(s)"
 
-            if retry_count < config.MAX_UPLOAD_RETRY_ATTEMPTS:
+            if retry_count < retry_settings['max_upload_retry_attempts']:
                 next_retry = datetime.now() + timedelta(seconds=delay)
                 self.state_manager.set_upload_state(
                     filepath, 'failed', retry_count=retry_count,
@@ -331,7 +332,7 @@ class UploadManager(LoggerMixin):
                 )
                 message = (
                     f"Upload failed for {filename}: {error} ({error_type}). "
-                    f"Will retry (attempt {retry_count + 1}/{config.MAX_UPLOAD_RETRY_ATTEMPTS}) "
+                    f"Will retry (attempt {retry_count + 1}/{retry_settings['max_upload_retry_attempts']}) "
                     f"in {delay_msg}."
                 )
             else:
@@ -340,7 +341,7 @@ class UploadManager(LoggerMixin):
                 )
                 message = (
                     f"Upload failed for {filename} after "
-                    f"{config.MAX_UPLOAD_RETRY_ATTEMPTS} attempts: {error}. "
+                    f"{retry_settings['max_upload_retry_attempts']} attempts: {error}. "
                     "Manual intervention required."
                 )
             self._log(message)

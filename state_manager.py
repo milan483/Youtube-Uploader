@@ -9,6 +9,12 @@ from storage.upload_state_store import UploadStateStore
 from storage.quota_state_store import QuotaStateStore
 from storage.playlist_sort_store import PlaylistSortStore
 from storage.preferences_store import PreferencesStore
+from utils.retry_settings import (
+    DEFAULT_RETRY_SETTINGS,
+    RETRY_SETTING_KEYS,
+    effective_retry_settings,
+    validate_retry_settings,
+)
 
 
 class StateManagerError(Exception):
@@ -113,7 +119,7 @@ class StateManager(LoggerMixin):
             'next_retry_time': state_info.get('next_retry_time')
         }
 
-    def is_ready_for_retry(self, filepath):
+    def is_ready_for_retry(self, filepath, retry_settings=None):
         if filepath not in self.upload_states:
             return False
 
@@ -123,7 +129,8 @@ class StateManager(LoggerMixin):
             return False
 
         retry_count = state_info.get('retry_count', 0)
-        if retry_count >= config.MAX_UPLOAD_RETRY_ATTEMPTS:
+        settings = self.get_retry_settings() if retry_settings is None else retry_settings
+        if retry_count >= settings['max_upload_retry_attempts']:
             return False
 
         next_retry_time = state_info.get('next_retry_time')
@@ -138,12 +145,14 @@ class StateManager(LoggerMixin):
         return True
 
     def get_failed_uploads_for_retry(self):
+        retry_settings = self.get_retry_settings()
+        retry_limit = retry_settings['max_upload_retry_attempts']
         retry_list = []
         for filepath, state_info in self.upload_states.items():
-            if self.is_ready_for_retry(filepath) and os.path.exists(filepath):
+            if self.is_ready_for_retry(filepath, retry_settings) and os.path.exists(filepath):
                 retry_list.append(filepath)
                 self._log(f"File ready for retry: {os.path.basename(filepath)} "
-                         f"(attempt {state_info.get('retry_count', 0) + 1}/{config.MAX_UPLOAD_RETRY_ATTEMPTS})")
+                         f"(attempt {state_info.get('retry_count', 0) + 1}/{retry_limit})")
         return retry_list
 
     def get_last_quota_hit(self):
@@ -220,7 +229,21 @@ class StateManager(LoggerMixin):
     def get_preference(self, key, default=None):
         return self.user_preferences.get(key, default)
 
+    def get_retry_settings(self):
+        return effective_retry_settings(self.user_preferences)
+
+    def set_retry_settings(self, settings):
+        validated = validate_retry_settings(settings)
+        updated = self.user_preferences.copy()
+        updated.update(validated)
+        # Commit memory only after the atomic JSON write succeeds.
+        self.preferences_store.save(updated)
+        self.user_preferences = updated
+        self._log('Saved retry settings')
+
     def set_preference(self, key, value):
+        if key in RETRY_SETTING_KEYS:
+            raise ValueError('Use set_retry_settings to update retry settings together')
         self.user_preferences[key] = value
         self.preferences_store.save(self.user_preferences)
         self._log(f"Saved preference: {key}")
@@ -245,8 +268,10 @@ class StateManager(LoggerMixin):
             'notify_quota_exceeded': config.DEFAULT_NOTIFY_QUOTA_EXCEEDED,
             'notify_batch_complete': config.DEFAULT_NOTIFY_BATCH_COMPLETE
         }
+        defaults.update(DEFAULT_RETRY_SETTINGS)
         prefs = defaults.copy()
         prefs.update(self.user_preferences)
+        prefs.update(self.get_retry_settings())
         return prefs
 
     def save_all_preferences(self, preferences):

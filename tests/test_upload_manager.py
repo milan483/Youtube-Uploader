@@ -1,11 +1,13 @@
 import io
 import os
 import ssl
+from datetime import datetime
 
 import pytest
 
 import upload_manager as upload_manager_module
 from upload_manager import QuotaExceededError, UploadManager
+from utils.retry_settings import DEFAULT_RETRY_SETTINGS
 
 
 class DummyMediaFileUpload:
@@ -66,13 +68,18 @@ class FakeFileHandler:
 
 
 class FakeStateManager:
-    def __init__(self, uploaded_hashes=None, retry_counts=None, delete_after_upload=False):
+    def __init__(self, uploaded_hashes=None, retry_counts=None, delete_after_upload=False,
+                 retry_settings=None):
         self.uploaded_hashes = set(uploaded_hashes or [])
         self.retry_counts = dict(retry_counts or {})
         self.set_state_calls = []
         self.history_calls = []
         self.quota_hits = 0
         self.delete_after_upload = delete_after_upload
+        self.retry_settings = {**DEFAULT_RETRY_SETTINGS, **(retry_settings or {})}
+
+    def get_retry_settings(self):
+        return self.retry_settings.copy()
 
     def get_preference(self, key, default=None):
         assert key == "delete_after_upload"
@@ -659,3 +666,77 @@ def test_manual_upload_never_recycles_an_existing_archive(trash_upload, tmp_path
     assert success and "Local cleanup skipped" in message
     assert calls == []
     assert archive.read_bytes() == b"old clip"
+
+
+@pytest.mark.parametrize('prior_count, expected_delay', [
+    (0, 30),
+    (1, 60),
+    (2, 90),
+])
+def test_configured_scheduled_backoff_and_cap(monkeypatch, tmp_path, prior_count, expected_delay):
+    state = FakeStateManager(
+        retry_counts={str(tmp_path / 'video.mp4'): prior_count},
+        retry_settings={
+            'max_upload_retry_attempts': 6,
+            'initial_retry_delay_seconds': 30,
+            'max_retry_delay_seconds': 90,
+        },
+    )
+    manager, filepath, _, _, _ = build_upload_manager(
+        monkeypatch, tmp_path, [Exception('backend unavailable')], state_manager=state
+    )
+
+    success, message, _ = manager.upload_video(filepath)
+    failure = state.set_state_calls[-1]
+    assert not success
+    assert f'in {expected_delay} second(s)' in message
+    assert f'attempt {prior_count + 2}/6' in message
+    assert failure['retry_count'] == prior_count + 1
+    deadline = datetime.fromisoformat(failure['next_retry_time'])
+    assert abs((deadline - datetime.now()).total_seconds() - expected_delay) < 5
+
+
+@pytest.mark.parametrize('limit', [1, 2, 100])
+def test_configured_attempt_limit_exhausts_without_deadline(monkeypatch, tmp_path, limit):
+    state = FakeStateManager(
+        retry_counts={str(tmp_path / 'video.mp4'): limit - 1},
+        retry_settings={'max_upload_retry_attempts': limit},
+    )
+    manager, filepath, _, _, _ = build_upload_manager(
+        monkeypatch, tmp_path, [Exception('backend unavailable')], state_manager=state
+    )
+    success, message, _ = manager.upload_video(filepath)
+
+    assert not success
+    assert f'after {limit} attempts' in message
+    assert state.set_state_calls[-1]['retry_count'] == limit
+    assert state.set_state_calls[-1]['next_retry_time'] is None
+
+
+def test_upload_snapshots_settings_before_network_request(monkeypatch, tmp_path):
+    state = FakeStateManager(retry_settings={
+        'max_upload_retry_attempts': 2,
+        'initial_retry_delay_seconds': 7,
+        'max_retry_delay_seconds': 10,
+    })
+    manager, filepath, _, _, _ = build_upload_manager(
+        monkeypatch, tmp_path, [Exception('backend unavailable')], state_manager=state
+    )
+    original_next_chunk = SequencedRequest.next_chunk
+
+    def change_settings_during_upload(request):
+        state.retry_settings.update({
+            'max_upload_retry_attempts': 1,
+            'initial_retry_delay_seconds': 200,
+            'max_retry_delay_seconds': 400,
+        })
+        return original_next_chunk(request)
+
+    monkeypatch.setattr(SequencedRequest, 'next_chunk', change_settings_during_upload)
+    success, message, _ = manager.upload_video(filepath)
+    failure = state.set_state_calls[-1]
+
+    assert not success and 'Will retry' in message
+    assert failure['retry_count'] == 1
+    deadline = datetime.fromisoformat(failure['next_retry_time'])
+    assert abs((deadline - datetime.now()).total_seconds() - 7) < 5

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -134,3 +135,109 @@ def test_non_boolean_delete_after_upload_is_rejected(configured_state_files):
         '{"delete_after_upload": "true"}', encoding="utf-8"
     )
     assert StateManager().get_all_preferences()["delete_after_upload"] is False
+
+
+def test_retry_settings_defaults_and_persistence(configured_state_files):
+    manager = StateManager()
+    assert manager.get_retry_settings() == {
+        'max_upload_retry_attempts': 3,
+        'initial_retry_delay_seconds': 60,
+        'max_retry_delay_seconds': 3600,
+    }
+
+    manager.set_preference('privacy_setting', 'unlisted')
+    manager.set_retry_settings({
+        'max_upload_retry_attempts': 7,
+        'initial_retry_delay_seconds': 12,
+        'max_retry_delay_seconds': 240,
+    })
+
+    reloaded = StateManager()
+    assert reloaded.get_retry_settings() == manager.get_retry_settings()
+    assert reloaded.get_preference('privacy_setting') == 'unlisted'
+
+
+@pytest.mark.parametrize('updates', [
+    {'max_upload_retry_attempts': False},
+    {'max_upload_retry_attempts': 100.0},
+    {'max_upload_retry_attempts': 101},
+    {'initial_retry_delay_seconds': 0},
+    {'max_retry_delay_seconds': 86401},
+    {'initial_retry_delay_seconds': 500, 'max_retry_delay_seconds': 100},
+])
+def test_retry_settings_validation_is_atomic(configured_state_files, updates):
+    manager = StateManager()
+    before = manager.get_retry_settings()
+
+    with pytest.raises(ValueError):
+        manager.set_retry_settings({**before, **updates})
+
+    assert manager.get_retry_settings() == before
+    assert StateManager().get_retry_settings() == before
+
+
+def test_retry_settings_write_failure_preserves_memory(configured_state_files, monkeypatch):
+    manager = StateManager()
+    before = manager.get_all_preferences()
+
+    def fail_save(data):
+        raise OSError('disk full')
+
+    monkeypatch.setattr(manager.preferences_store, 'save', fail_save)
+    with pytest.raises(OSError, match='disk full'):
+        manager.set_retry_settings({
+            'max_upload_retry_attempts': 5,
+            'initial_retry_delay_seconds': 20,
+            'max_retry_delay_seconds': 100,
+        })
+
+    assert manager.get_all_preferences() == before
+
+
+def test_bad_saved_retry_fields_preserve_unrelated_preferences(configured_state_files):
+    configured_state_files['USER_PREFERENCES_FILE'].write_text(json.dumps({
+        'privacy_setting': 'unlisted',
+        'scan_subdirectories': True,
+        'max_upload_retry_attempts': True,
+        'initial_retry_delay_seconds': 90000,
+        'max_retry_delay_seconds': 1.5,
+    }), encoding='utf-8')
+    manager = StateManager()
+
+    assert manager.get_retry_settings() == {
+        'max_upload_retry_attempts': 3,
+        'initial_retry_delay_seconds': 60,
+        'max_retry_delay_seconds': 3600,
+    }
+    assert manager.get_preference('privacy_setting') == 'unlisted'
+    assert manager.get_preference('scan_subdirectories') is True
+
+
+def test_increasing_retry_limit_revives_exhausted_file(configured_state_files, tmp_path):
+    manager = StateManager()
+    source = tmp_path / 'failed.mp4'
+    source.write_bytes(b'video')
+    manager.set_upload_state(str(source), 'failed', retry_count=3)
+    assert not manager.is_ready_for_retry(str(source))
+
+    manager.set_retry_settings({
+        'max_upload_retry_attempts': 5,
+        'initial_retry_delay_seconds': 60,
+        'max_retry_delay_seconds': 3600,
+    })
+    assert manager.is_ready_for_retry(str(source))
+    assert str(source) in manager.get_failed_uploads_for_retry()
+
+
+def test_retry_settings_preserve_existing_deadlines_and_allow_policy_snapshot(configured_state_files):
+    manager = StateManager()
+    snapshot = manager.get_retry_settings()
+    deadline = (datetime.now() + timedelta(minutes=10)).isoformat()
+    manager.set_upload_state('waiting.mp4', 'failed', retry_count=1, next_retry_time=deadline)
+    manager.set_upload_state('exhausted.mp4', 'failed', retry_count=3)
+    manager.set_retry_settings({**snapshot, 'max_upload_retry_attempts': 8})
+
+    assert manager.get_retry_info('waiting.mp4')['next_retry_time'] == deadline
+    assert not manager.is_ready_for_retry('waiting.mp4')
+    assert not manager.is_ready_for_retry('exhausted.mp4', snapshot)
+    assert manager.is_ready_for_retry('exhausted.mp4')
