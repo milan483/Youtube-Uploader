@@ -48,8 +48,7 @@ Local validation on 2026-11-14:
   preservation, limits of 1 and 100, capped delays, per-upload and batch
   policy snapshots, unchanged deadlines, and exhausted-file eligibility.
 
-Evidence and isolated Python environments are under
-`/home/kylan/.codex/outputs/youtube-uploader-retry-settings-20261114/`.
+Local evidence and isolated Python environments were retained outside the repository.
 Windows desktop interaction and live YouTube uploads have not been run.
 Implementation commit: `0baee54680a1eee5f48f0837ab94f88ca7de7ebe`.
 Draft PR: [#9](https://github.com/milan483/Youtube-Uploader/pull/9).
